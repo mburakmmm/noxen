@@ -248,3 +248,32 @@ class Result[T]:
         if v is None:
             return fallback
         return v
+
+    def errors_json(self) -> str:
+        w: JsonWriter = JsonWriter()
+        w.begin_object()
+        w.write_key("valid")
+        w.write_bool(self.is_ok)
+        w.write_key("error_count")
+        w.write_int(len(self.errors))
+        w.write_key("errors")
+        w.begin_array()
+        i: int = 0
+        while i < len(self.errors):
+            e: FieldError = self.errors[i]
+            w.begin_object()
+            w.write_key("path")
+            w.write_string(e.path)
+            w.write_key("code")
+            w.write_string(e.code)
+            w.write_key("message")
+            w.write_string(e.message)
+            w.write_key("expected")
+            w.write_string(e.expected)
+            w.write_key("actual")
+            w.write_string(e.actual)
+            w.end_object()
+            i = i + 1
+        w.end_array()
+        w.end_object()
+        return w.build()
