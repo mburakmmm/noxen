@@ -4,7 +4,7 @@ import nox.db
 from nox.db import Row
 import noxen.core
 import noxen.models
-from noxen.core import ValidatedData
+from noxen.core import ValidatedData, ValidationResult, Result
 from noxen.models import ModelSchema
 
 def row_to_validated_data(row: Row) -> ValidatedData:
@@ -41,10 +41,15 @@ class DbAdapter[T]:
     def __init__(self, model: ModelSchema[T]) -> None:
         self.model = model
 
+    def validate_row(self, row: Row) -> ValidationResult:
+        return self.model.validate_row(row)
+
+    def parse_row_result(self, row: Row) -> Result[T]:
+        return self.model.parse_row(row)
+
     def parse_row(self, row: Row) -> T:
-        d: ValidatedData = row_to_validated_data(row)
-        f: (ValidatedData) -> T = self.model.factory
-        return f(d)
+        res: Result[T] = self.model.parse_row(row)
+        return res.unwrap()
 
     def parse_rows(self, rows: list[Row]) -> list[T]:
         out: list[T] = []

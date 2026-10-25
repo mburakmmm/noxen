@@ -5,6 +5,21 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-10-26
+
+### Fixed
+- **Database Row Validation Enforced**:
+  - `DbAdapter[T].parse_row` and `DbAdapter[T].parse_rows` now rigorously validate all database columns against the model's schema before hydrating the object.
+  - Invalid database rows raise `ValidationError` with structured error items.
+  - Non-throwing validation added via `DbAdapter[T].parse_row_result(row) -> Result[T]` and `validate_row(row) -> ValidationResult`.
+- **Integer Precision & 64-Bit Boundaries**:
+  - Added exact 64-bit integer bounds (`min_i`, `max_i`, `ge_i`, `le_i`) on `Field` preventing float conversion precision loss.
+  - Formatted integer bounds in JSON Schema generator directly as integers without float casting.
+- **Documentation & Facade Consistency**:
+  - Corrected `ModelSchema[T].validate` documentation in `docs/api.md`.
+  - Added `Serializer.include_extras(data)` enabling automatic passthrough of extra attributes captured under `POLICY_ALLOW`.
+  - Documented exact supported ISO 8601 subset and Integer Precision Policy ($[-2^{53}+1, 2^{53}-1]$ for JSON numbers, 64-bit string integers for large IDs).
+
 ## [0.3.0] - 2026-10-26
 
 ### Added

@@ -41,6 +41,7 @@ The root validation engine for structured data.
 * `add_validator(fn: (ValidatedData) -> list[FieldError]) -> None`: Registers a cross-field custom validator callback.
 * `validate(v: JsonValue) -> ValidationResult`: Validates an in-memory `JsonValue` tree.
 * `validate_json(json_str: str) -> ValidationResult`: Parses and validates a JSON string.
+* `validate_row(row: Row) -> ValidationResult`: Validates a database `nox.db.Row` against schema constraints.
 * `to_json_schema() -> str`: Generates standard JSON Schema Draft 2020-12 specification with `$defs` and `$ref`.
 
 ### `Field` (`schema.nox` / `fields.nox`)
@@ -58,6 +59,8 @@ Fluent builder for configuring field rules and constraints.
 * `max(v: float) / le(v: float) -> Field`: Inclusive maximum numeric bound.
 * `gt(v: float) -> Field`: Exclusive minimum numeric bound.
 * `lt(v: float) -> Field`: Exclusive maximum numeric bound.
+* `min_i(v: int) / ge_i(v: int) -> Field`: Exact integer minimum bound without float precision loss.
+* `max_i(v: int) / le_i(v: int) -> Field`: Exact integer maximum bound without float precision loss.
 * `min_length(n: int) -> Field`: Minimum string character length.
 * `max_length(n: int) -> Field`: Maximum string character length.
 * `regex(pat: str) -> Field`: Regular expression constraint.
@@ -68,8 +71,8 @@ Fluent builder for configuring field rules and constraints.
 * `email() -> Field`: Validates standard email address.
 * `url() -> Field`: Validates absolute HTTP/HTTPS URL via `nox.url`.
 * `uuid() -> Field`: Validates canonical 36-character UUID format.
-* `date() -> Field`: Validates ISO 8601 calendar date (`YYYY-MM-DD`).
-* `time() -> Field`: Validates ISO 8601 time (`HH:MM:SS` with optional timezone/fraction).
+* `date() -> Field`: Validates ISO 8601 calendar date (`YYYY-MM-DD`, with leap year checks).
+* `time() -> Field`: Validates ISO 8601 time (`HH:MM:SS` with optional timezone/fractional seconds).
 * `datetime() -> Field`: Validates ISO 8601 datetime (`YYYY-MM-DDTHH:MM:SS[Z]`).
 * `describe(desc: str) -> Field`: Adds human-readable documentation description.
 
@@ -77,15 +80,19 @@ Fluent builder for configuring field rules and constraints.
 Generic wrapper mapping raw validated data into strongly typed Nox classes.
 
 * `ModelSchema[T](schema: Schema, factory: (ValidatedData) -> T)`
-* `parse_json(json_str: str) -> Result[T]`: Parses JSON, validates, and hydrates typed instance.
-* `validate(v: JsonValue) -> Result[T]`: Validates `JsonValue` and hydrates typed instance.
+* `parse(v: JsonValue) -> Result[T]`: Validates `JsonValue` and returns `Result[T]` with typed instance.
+* `parse_json(json_str: str) -> Result[T]`: Parses JSON, validates, and returns `Result[T]` with typed instance.
+* `parse_row(row: Row) -> Result[T]`: Validates database row and returns `Result[T]` with typed instance.
+* `validate(v: JsonValue) -> ValidationResult`: Validates `JsonValue` tree and returns `ValidationResult`.
+* `validate_json(json_str: str) -> ValidationResult`: Validates JSON text and returns `ValidationResult`.
+* `validate_row(row: Row) -> ValidationResult`: Validates database row and returns `ValidationResult`.
 
 ### `Result[T]` (`core.nox`)
 Generic result container representing validation outcome.
 
 * `is_ok: bool`: True if validation succeeded.
 * `errors: list[FieldError]`: List of collected field errors on failure.
-* `unwrap() -> T`: Returns the inner value or raises `ValidationError`.
+* `unwrap() -> T`: Returns the inner value or raises `ValidationError(errors)`.
 * `unwrap_or(default_val: T) -> T`: Returns the inner value or fallback.
 * `errors_json() -> str`: Returns serialized JSON array of errors.
 
@@ -111,6 +118,7 @@ Streaming fluent builder for high-performance JSON serialization.
 * `null(k)`
 * `list_str(k, items)`, `list_int(k, items)`, `list_float(k, items)`, `list_bool(k, items)`
 * `raw_json(k, json_text)`, `opt_raw_json(k, json_text)`
+* `include_extras(data: ValidatedData)`: Automatically serializes extra fields captured under `POLICY_ALLOW`.
 * `build() -> str`
 
 ---
@@ -123,7 +131,23 @@ Streaming fluent builder for high-performance JSON serialization.
 * `json_201(body_json: str) -> HttpResponse`: Generates HTTP 201 Created JSON response.
 
 ### `db_adapter.nox` (Nyx / `nox.db`)
-* `row_to_validated_data(row: Row) -> ValidatedData`: Maps `nox.db.Row` into `ValidatedData`.
 * `DbAdapter[T](model: ModelSchema[T])`:
-  - `parse_row(row: Row) -> T`: Maps a single database row to a typed model.
-  - `parse_rows(rows: list[Row]) -> list[T]`: Maps multiple database rows to a typed model list.
+  - `parse_row(row: Row) -> T`: Validates row against schema. Returns typed model or raises `ValidationError` on failure.
+  - `parse_row_result(row: Row) -> Result[T]`: Validates row against schema without raising exceptions, returning `Result[T]`.
+  - `validate_row(row: Row) -> ValidationResult`: Validates row against schema returning `ValidationResult`.
+  - `parse_rows(rows: list[Row]) -> list[T]`: Validates multiple rows and returns typed model list, raising `ValidationError` on any invalid row.
+* `row_to_validated_data(row: Row) -> ValidatedData`: Low-level mapping from `nox.db.Row` into `ValidatedData`.
+
+---
+
+## 4. Supported ISO 8601 Subset & Precision Policies
+
+### ISO 8601 Date & Time Specification
+* **Date (`.date()`)**: `YYYY-MM-DD` (four-digit year 0001–9999, two-digit month 01–12, two-digit day 01–31 with full leap year validation for February 29).
+* **Time (`.time()`)**: `HH:MM:SS` (hour 00–23, minute 00–59, second 00–59) with optional fractional seconds (`.sss`) and optional timezone (`Z` or `[+-]HH:MM`).
+* **Datetime (`.datetime()`)**: Combined ISO 8601 timestamp formatted as `YYYY-MM-DDTHH:MM:SS` (or with space separator) with optional timezone offset.
+
+### Integer Precision Policy
+1. In raw JSON numbers, Nox standard library represents numeric values via `JsonValue.as_number()` (IEEE 754 float64). Noxen enforces safe integer boundaries: $[-2^{53} + 1, 2^{53} - 1]$ ($[-9007199254740991, 9007199254740991]$). Any number outside this range is rejected to prevent silent precision loss.
+2. For full 64-bit signed integers (up to $2^{63}-1$), string encoding is supported under `COERCION_LAX` or custom validators, parsed directly into Nox's native 64-bit integer type.
+3. Schema integer bounds (`min_i`, `max_i`, `min`, `max`) store and compare 64-bit integers directly without float casting.

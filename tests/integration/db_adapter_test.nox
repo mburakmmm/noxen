@@ -12,7 +12,8 @@ import core
 import db_adapter
 from schema import Schema
 from models import ModelSchema
-from core import ValidatedData
+from core import ValidatedData, ValidationResult, Result
+from errors import ValidationError
 from db_adapter import DbAdapter, row_to_validated_data
 
 class UserRecord:
@@ -77,6 +78,26 @@ nox.test.assert_eq_int(d1.get_int("id"), 1, "validated data id is correct")
 
 d2: ValidatedData = row_to_validated_data(rows[1])
 nox.test.assert_true(d2.is_null("bio"), "validated data bio is null")
+
+# 6. Test database row validation failure
+conn.execute("INSERT INTO users (id, name, email, bio) VALUES (-5, 'Bad User', 'not-valid-email', 'Hacker')")
+bad_rows: list[Row] = conn.query("SELECT id, name, email, bio FROM users WHERE id = -5")
+bad_row: Row = bad_rows[0]
+
+val_res: ValidationResult = adapter.validate_row(bad_row)
+nox.test.assert_true(not val_res.is_valid, "invalid database row fails validation")
+nox.test.assert_eq_int(len(val_res.errors), 2, "2 database row errors (id out_of_range and bad email)")
+
+res_bad: Result[UserRecord] = adapter.parse_row_result(bad_row)
+nox.test.assert_true(not res_bad.is_ok, "parse_row_result returns Result with is_ok=False")
+
+caught_err: bool = False
+try:
+    adapter.parse_row(bad_row)
+except ValidationError as ve:
+    caught_err = True
+
+nox.test.assert_true(caught_err, "parse_row raises ValidationError on invalid database row")
 
 conn.close()
 print("db_adapter_test passed")

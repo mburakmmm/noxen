@@ -8,6 +8,8 @@ from core import ValidatedData, ValidationResult
 import nox.json
 import nox.regex
 import nox.strings
+import nox.db
+from nox.db import Row
 from nox.json import JsonError, JsonWriter
 
 # Presence modes
@@ -85,9 +87,13 @@ class Field:
     has_min: bool
     min_val: float
     is_exclusive_min: bool
+    has_min_int: bool
+    min_val_int: int
     has_max: bool
     max_val: float
     is_exclusive_max: bool
+    has_max_int: bool
+    max_val_int: int
     has_min_len: bool
     min_len: int
     has_max_len: bool
@@ -122,9 +128,13 @@ class Field:
         self.has_min = False
         self.min_val = 0.0
         self.is_exclusive_min = False
+        self.has_min_int = False
+        self.min_val_int = 0
         self.has_max = False
         self.max_val = 0.0
         self.is_exclusive_max = False
+        self.has_max_int = False
+        self.max_val_int = 0
         self.has_min_len = False
         self.min_len = 0
         self.has_max_len = False
@@ -192,6 +202,9 @@ class Field:
         self.has_min = True
         self.min_val = v
         self.is_exclusive_min = False
+        if self.kind == "int":
+            self.has_min_int = True
+            self.min_val_int = int(v)
         return self
 
     def ge(self: Field, v: float) -> Field:
@@ -201,12 +214,18 @@ class Field:
         self.has_min = True
         self.min_val = v
         self.is_exclusive_min = True
+        if self.kind == "int":
+            self.has_min_int = True
+            self.min_val_int = int(v)
         return self
 
     def max(self: Field, v: float) -> Field:
         self.has_max = True
         self.max_val = v
         self.is_exclusive_max = False
+        if self.kind == "int":
+            self.has_max_int = True
+            self.max_val_int = int(v)
         return self
 
     def le(self: Field, v: float) -> Field:
@@ -216,7 +235,32 @@ class Field:
         self.has_max = True
         self.max_val = v
         self.is_exclusive_max = True
+        if self.kind == "int":
+            self.has_max_int = True
+            self.max_val_int = int(v)
         return self
+
+    def min_i(self: Field, v: int) -> Field:
+        self.has_min_int = True
+        self.min_val_int = v
+        self.is_exclusive_min = False
+        self.has_min = True
+        self.min_val = float(v)
+        return self
+
+    def ge_i(self: Field, v: int) -> Field:
+        return self.min_i(v)
+
+    def max_i(self: Field, v: int) -> Field:
+        self.has_max_int = True
+        self.max_val_int = v
+        self.is_exclusive_max = False
+        self.has_max = True
+        self.max_val = float(v)
+        return self
+
+    def le_i(self: Field, v: int) -> Field:
+        return self.max_i(v)
 
     def min_length(self: Field, n: int) -> Field:
         self.has_min_len = True
@@ -537,7 +581,18 @@ class Schema:
                             )
                         else:
                             iv: int = iv_opt
-                            if field.has_min:
+                            if field.has_min_int:
+                                if field.is_exclusive_min:
+                                    if iv <= field.min_val_int:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val_int), "> " + str(field.min_val_int), str(iv))
+                                        )
+                                else:
+                                    if iv < field.min_val_int:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val_int), ">= " + str(field.min_val_int), str(iv))
+                                        )
+                            elif field.has_min:
                                 if field.is_exclusive_min:
                                     if float(iv) <= field.min_val:
                                         err_list.append(
@@ -548,7 +603,18 @@ class Schema:
                                         err_list.append(
                                             FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(iv))
                                         )
-                            if field.has_max:
+                            if field.has_max_int:
+                                if field.is_exclusive_max:
+                                    if iv >= field.max_val_int:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val_int), "< " + str(field.max_val_int), str(iv))
+                                        )
+                                else:
+                                    if iv > field.max_val_int:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val_int), "<= " + str(field.max_val_int), str(iv))
+                                        )
+                            elif field.has_max:
                                 if field.is_exclusive_max:
                                     if float(iv) >= field.max_val:
                                         err_list.append(
@@ -767,6 +833,224 @@ class Schema:
     def validate(self: Schema, v: JsonValue) -> ValidationResult:
         return self.validate_at(v, "", 0)
 
+    def validate_row(self: Schema, row: Row) -> ValidationResult:
+        data: ValidatedData = ValidatedData()
+        err_list: list[FieldError] = []
+
+        # 1. Unknown columns policy check
+        if self.policy == POLICY_FORBID:
+            n_cols: int = row.column_count()
+            ci: int = 0
+            while ci < n_cols:
+                col: str = row.column_name(ci)
+                matched: Field | None = self.get_field(col)
+                if matched is None:
+                    err_list.append(
+                        FieldError(col, CODE_EXTRA_FIELD, "Unexpected unknown column in database row: '" + col + "'", "none", "present")
+                    )
+                ci = ci + 1
+        elif self.policy == POLICY_ALLOW:
+            n_cols_a: int = row.column_count()
+            cia: int = 0
+            while cia < n_cols_a:
+                cola: str = row.column_name(cia)
+                matched_a: Field | None = self.get_field(cola)
+                if matched_a is None:
+                    if row.is_null(cia):
+                        data.set_extra(cola, "null")
+                    else:
+                        data.set_extra(cola, "\"" + row.get_str(cia) + "\"")
+                cia = cia + 1
+
+        # 2. Validate declared fields against row
+        fi: int = 0
+        while fi < len(self.fields):
+            field: Field = self.fields[fi]
+            target_name: str = field.name
+            if len(field.json_name) > 0:
+                target_name = field.json_name
+
+            col_idx: int = -1
+            rci: int = 0
+            while rci < row.column_count():
+                cname: str = row.column_name(rci)
+                if cname == target_name or cname == field.name:
+                    col_idx = rci
+                rci = rci + 1
+
+            if col_idx == -1:
+                # Column not present in row
+                if field.has_default:
+                    if field.kind == "string":
+                        data.set_str(field.name, field.default_str)
+                    elif field.kind == "int":
+                        data.set_int(field.name, field.default_int)
+                    elif field.kind == "float":
+                        data.set_float(field.name, field.default_float)
+                    elif field.kind == "bool":
+                        data.set_bool(field.name, field.default_bool)
+                elif field.mode == MODE_REQUIRED or field.mode == MODE_REQUIRED_NULLABLE:
+                    err_list.append(
+                        FieldError(field.name, CODE_MISSING_FIELD, "Missing required database column: '" + field.name + "'", field.kind, "missing")
+                    )
+            else:
+                # Column is present in row
+                if row.is_null(col_idx):
+                    if field.mode == MODE_REQUIRED_NULLABLE or field.mode == MODE_OPTIONAL_NULLABLE:
+                        data.set_null(field.name)
+                    else:
+                        err_list.append(
+                            FieldError(field.name, CODE_UNEXPECTED_NULL, "Database column '" + field.name + "' cannot be null", "non-null " + field.kind, "null")
+                        )
+                else:
+                    raw_str: str = row.get_str(col_idx)
+                    actual_repr: str = raw_str
+                    if field.is_secret:
+                        actual_repr = "[REDACTED]"
+
+                    if field.kind == "string":
+                        if field.has_min_len and len(raw_str) < field.min_len:
+                            err_list.append(
+                                FieldError(field.name, CODE_STRING_TOO_SHORT, "Field '" + field.name + "' must have at least " + str(field.min_len) + " characters", "length >= " + str(field.min_len), str(len(raw_str)))
+                            )
+                        if field.has_max_len and len(raw_str) > field.max_len:
+                            err_list.append(
+                                FieldError(field.name, CODE_STRING_TOO_LONG, "Field '" + field.name + "' must have at most " + str(field.max_len) + " characters", "length <= " + str(field.max_len), str(len(raw_str)))
+                            )
+                        if len(field.choices) > 0:
+                            matched_ch: bool = False
+                            chi: int = 0
+                            while chi < len(field.choices):
+                                if field.choices[chi] == raw_str:
+                                    matched_ch = True
+                                chi = chi + 1
+                            if not matched_ch:
+                                err_list.append(
+                                    FieldError(field.name, CODE_CHOICE_MISMATCH, "Field '" + field.name + "' must be one of the allowed choices", "choice", actual_repr)
+                                )
+                        if len(field.pattern) > 0 and not nox.regex.is_match(field.pattern, raw_str):
+                            err_list.append(
+                                FieldError(field.name, CODE_PATTERN_MISMATCH, "Field '" + field.name + "' does not match pattern: " + field.pattern, field.pattern, actual_repr)
+                            )
+                        if field.fmt == "email" and not validators.is_valid_email(raw_str):
+                            err_list.append(
+                                FieldError(field.name, CODE_INVALID_EMAIL, "Field '" + field.name + "' is not a valid email address", "email", actual_repr)
+                            )
+                        if field.fmt == "url" and not validators.is_valid_url(raw_str):
+                            err_list.append(
+                                FieldError(field.name, CODE_INVALID_URL, "Field '" + field.name + "' is not a valid absolute URL", "url", actual_repr)
+                            )
+                        if field.fmt == "uuid" and not validators.is_valid_uuid(raw_str):
+                            err_list.append(
+                                FieldError(field.name, CODE_INVALID_UUID, "Field '" + field.name + "' is not a valid UUID", "uuid", actual_repr)
+                            )
+                        if field.fmt == "date" and not validators.is_valid_date(raw_str):
+                            err_list.append(
+                                FieldError(field.name, CODE_INVALID_DATE, "Field '" + field.name + "' is not a valid ISO 8601 date (YYYY-MM-DD)", "date", actual_repr)
+                            )
+                        if field.fmt == "time" and not validators.is_valid_time(raw_str):
+                            err_list.append(
+                                FieldError(field.name, CODE_INVALID_TIME, "Field '" + field.name + "' is not a valid ISO 8601 time (HH:MM:SS)", "time", actual_repr)
+                            )
+                        if field.fmt == "date-time" and not validators.is_valid_datetime(raw_str):
+                            err_list.append(
+                                FieldError(field.name, CODE_INVALID_DATETIME, "Field '" + field.name + "' is not a valid ISO 8601 datetime", "date-time", actual_repr)
+                            )
+                        data.set_str(field.name, raw_str)
+
+                    elif field.kind == "int":
+                        iv_opt: int | None = None
+                        try:
+                            iv_opt = row.get_int(col_idx)
+                        except ValueError as e:
+                            pass
+                        if iv_opt is None:
+                            err_list.append(
+                                FieldError(field.name, CODE_TYPE_MISMATCH, "Column '" + field.name + "' expected integer", "int", actual_repr)
+                            )
+                        else:
+                            iv: int = iv_opt
+                            if field.has_min_int:
+                                if field.is_exclusive_min:
+                                    if iv <= field.min_val_int:
+                                        err_list.append(FieldError(field.name, CODE_OUT_OF_RANGE, "Field '" + field.name + "' must be strictly greater than " + str(field.min_val_int), "> " + str(field.min_val_int), str(iv)))
+                                else:
+                                    if iv < field.min_val_int:
+                                        err_list.append(FieldError(field.name, CODE_OUT_OF_RANGE, "Field '" + field.name + "' must be at least " + str(field.min_val_int), ">= " + str(field.min_val_int), str(iv)))
+                            if field.has_max_int:
+                                if field.is_exclusive_max:
+                                    if iv >= field.max_val_int:
+                                        err_list.append(FieldError(field.name, CODE_OUT_OF_RANGE, "Field '" + field.name + "' must be strictly less than " + str(field.max_val_int), "< " + str(field.max_val_int), str(iv)))
+                                else:
+                                    if iv > field.max_val_int:
+                                        err_list.append(FieldError(field.name, CODE_OUT_OF_RANGE, "Field '" + field.name + "' must be at most " + str(field.max_val_int), "<= " + str(field.max_val_int), str(iv)))
+                            if len(field.choices_int) > 0:
+                                matched_chi: bool = False
+                                chii: int = 0
+                                while chii < len(field.choices_int):
+                                    if field.choices_int[chii] == iv:
+                                        matched_chi = True
+                                    chii = chii + 1
+                                if not matched_chi:
+                                    err_list.append(FieldError(field.name, CODE_CHOICE_MISMATCH, "Field '" + field.name + "' must be one of the allowed integer choices", "choice", str(iv)))
+                            data.set_int(field.name, iv)
+                            data.set_str(field.name, raw_str)
+
+                    elif field.kind == "float":
+                        fv_opt: float | None = None
+                        try:
+                            fv_opt = row.get_float(col_idx)
+                        except ValueError as e:
+                            pass
+                        if fv_opt is None:
+                            err_list.append(
+                                FieldError(field.name, CODE_TYPE_MISMATCH, "Column '" + field.name + "' expected float", "float", actual_repr)
+                            )
+                        else:
+                            fv: float = fv_opt
+                            if field.has_min:
+                                if field.is_exclusive_min:
+                                    if fv <= field.min_val:
+                                        err_list.append(FieldError(field.name, CODE_OUT_OF_RANGE, "Field '" + field.name + "' must be strictly greater than " + str(field.min_val), "> " + str(field.min_val), str(fv)))
+                                else:
+                                    if fv < field.min_val:
+                                        err_list.append(FieldError(field.name, CODE_OUT_OF_RANGE, "Field '" + field.name + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(fv)))
+                            if field.has_max:
+                                if field.is_exclusive_max:
+                                    if fv >= field.max_val:
+                                        err_list.append(FieldError(field.name, CODE_OUT_OF_RANGE, "Field '" + field.name + "' must be strictly less than " + str(field.max_val), "< " + str(field.max_val), str(fv)))
+                                else:
+                                    if fv > field.max_val:
+                                        err_list.append(FieldError(field.name, CODE_OUT_OF_RANGE, "Field '" + field.name + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(fv)))
+                            data.set_float(field.name, fv)
+                            data.set_str(field.name, raw_str)
+
+                    elif field.kind == "bool":
+                        if raw_str == "1" or raw_str == "true" or raw_str == "TRUE" or raw_str == "t":
+                            data.set_bool(field.name, True)
+                            data.set_int(field.name, 1)
+                        elif raw_str == "0" or raw_str == "false" or raw_str == "FALSE" or raw_str == "f":
+                            data.set_bool(field.name, False)
+                            data.set_int(field.name, 0)
+                        else:
+                            err_list.append(
+                                FieldError(field.name, CODE_TYPE_MISMATCH, "Column '" + field.name + "' expected boolean (0/1 or true/false)", "bool", actual_repr)
+                            )
+            fi = fi + 1
+
+        # 3. Custom validators
+        cvi: int = 0
+        while cvi < len(self.custom_validators):
+            cv: (ValidatedData) -> list[FieldError] = self.custom_validators[cvi]
+            extra_errs: list[FieldError] = cv(data)
+            eei: int = 0
+            while eei < len(extra_errs):
+                err_list.append(extra_errs[eei])
+                eei = eei + 1
+            cvi = cvi + 1
+
+        return ValidationResult(len(err_list) == 0, data, err_list)
+
     def validate_json(self: Schema, json_str: str) -> ValidationResult:
         try:
             v: JsonValue = nox.json.parse(json_str)
@@ -870,13 +1154,25 @@ class Schema:
             elif f.kind == "int":
                 w.write_key("type")
                 w.write_string("integer")
-                if f.has_min:
+                if f.has_min_int:
+                    if f.is_exclusive_min:
+                        w.write_key("exclusiveMinimum")
+                    else:
+                        w.write_key("minimum")
+                    w.write_int(f.min_val_int)
+                elif f.has_min:
                     if f.is_exclusive_min:
                         w.write_key("exclusiveMinimum")
                     else:
                         w.write_key("minimum")
                     w.write_int(int(f.min_val))
-                if f.has_max:
+                if f.has_max_int:
+                    if f.is_exclusive_max:
+                        w.write_key("exclusiveMaximum")
+                    else:
+                        w.write_key("maximum")
+                    w.write_int(f.max_val_int)
+                elif f.has_max:
                     if f.is_exclusive_max:
                         w.write_key("exclusiveMaximum")
                     else:

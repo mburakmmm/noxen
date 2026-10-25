@@ -2,7 +2,7 @@
 
 > **Statically typed data modeling, parsing, validation, and serialization for the Nox programming language.**
 >
-> Maturity status: **v0.3.0 — Comprehensive Hardening & Security Release**. Verified against `noxc 2.0.27+`.
+> Maturity status: **v0.3.1 — High-Assurance Validation & Precision Release**. Verified against `noxc 2.0.27+`.
 
 ---
 
@@ -47,7 +47,7 @@ Add Noxen to your project's `nox.json`:
     {
       "alias": "noxen",
       "repo": "github.com/mburakmmm/noxen",
-      "ref": "v0.3.0"
+      "ref": "v0.3.1"
     }
   ]
 }
@@ -62,7 +62,7 @@ noxc fetch
 Or install via `noxc`:
 
 ```sh
-noxc add noxen github.com/mburakmmm/noxen --ref v0.3.0
+noxc add noxen github.com/mburakmmm/noxen --ref v0.3.1
 ```
 
 ---
@@ -70,12 +70,8 @@ noxc add noxen github.com/mburakmmm/noxen --ref v0.3.0
 ## Quickstart
 
 ```nox
-import schema
-import models
-import core
-from schema import Schema
-from models import ModelSchema
-from core import ValidatedData, Result
+import noxen
+from noxen import Schema, ModelSchema, ValidatedData, Result
 
 class User:
     name: str

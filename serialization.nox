@@ -2,6 +2,8 @@
 
 import nox.json
 from nox.json import JsonWriter
+import core
+from core import ValidatedData
 
 class Serializer:
     _w: JsonWriter
@@ -106,6 +108,15 @@ class Serializer:
         else:
             v: JsonValue = nox.json.parse(json_text)
             self._w.write_value(v)
+
+    def include_extras(self: Serializer, data: ValidatedData) -> None:
+        keys: list[str] = data.get_extra_keys()
+        i: int = 0
+        while i < len(keys):
+            k: str = keys[i]
+            v_json: str = data.get_extra(k)
+            self.raw_json(k, v_json)
+            i = i + 1
 
     def build(self: Serializer) -> str:
         self._w.end_object()
