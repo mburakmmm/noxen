@@ -5,6 +5,8 @@ from errors import FieldError, CODE_INVALID_JSON, CODE_EXPECTED_OBJECT, CODE_MIS
 import validators
 import core
 from core import ValidatedData, ValidationResult
+import serialization
+from serialization import Serializer
 import nox.json
 import nox.regex
 import nox.strings
@@ -1060,6 +1062,62 @@ class Schema:
             errs: list[FieldError] = []
             errs.append(FieldError("root", CODE_INVALID_JSON, "Malformed JSON syntax: " + e.message, "valid JSON", "syntax error"))
             return ValidationResult(False, data, errs)
+
+    def dump(self: Schema, data: ValidatedData) -> str:
+        s: Serializer = Serializer()
+        fi: int = 0
+        while fi < len(self.fields):
+            f: Field = self.fields[fi]
+            out_key: str = f.name
+            if len(f.json_name) > 0:
+                out_key = f.json_name
+
+            if data.is_null(f.name):
+                s.null(out_key)
+            elif data.has(f.name):
+                if f.kind == "string":
+                    s.str(out_key, data.get_str(f.name))
+                elif f.kind == "int":
+                    s.int(out_key, data.get_int(f.name))
+                elif f.kind == "float":
+                    s.float(out_key, data.get_float(f.name))
+                elif f.kind == "bool":
+                    s.bool(out_key, data.get_bool(f.name))
+                elif f.kind == "object":
+                    ns: Schema | None = f.nested_schema
+                    if ns is not None:
+                        sub_vd: ValidatedData = data.get_object(f.name)
+                        sub_json: str = ns.dump(sub_vd)
+                        s.raw_json(out_key, sub_json)
+                elif f.kind == "list":
+                    if f.item_kind == "string" or f.item_kind == "str":
+                        s.list_str(out_key, data.get_list_str(f.name))
+                    elif f.item_kind == "int":
+                        s.list_int(out_key, data.get_list_int(f.name))
+                    elif f.item_kind == "float":
+                        s.list_float(out_key, data.get_list_float(f.name))
+                    elif f.item_kind == "bool":
+                        s.list_bool(out_key, data.get_list_bool(f.name))
+                    elif f.item_kind == "object":
+                        is_sub: Schema | None = f.item_schema
+                        if is_sub is not None:
+                            sub_objs: list[ValidatedData] = data.get_list_object(f.name)
+                            jw: JsonWriter = JsonWriter()
+                            jw.begin_array()
+                            jwi: int = 0
+                            while jwi < len(sub_objs):
+                                item_json: str = is_sub.dump(sub_objs[jwi])
+                                item_val: JsonValue = nox.json.parse(item_json)
+                                jw.write_value(item_val)
+                                jwi = jwi + 1
+                            jw.end_array()
+                            s.raw_json(out_key, jw.build())
+            fi = fi + 1
+
+        if self.policy == POLICY_ALLOW:
+            s.include_extras(data)
+
+        return s.build()
 
     def to_json_schema(self: Schema) -> str:
         w: JsonWriter = JsonWriter()

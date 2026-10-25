@@ -99,5 +99,46 @@ except ValidationError as ve:
 
 nox.test.assert_true(caught_err, "parse_row raises ValidationError on invalid database row")
 
+# 7. Test mixed SQL types (bool, float, int, string) with strict type fidelity
+class ProductRecord:
+    sku: str
+    price: float
+    stock: int
+    is_active: bool
+
+    def __init__(self, sku: str, price: float, stock: int, is_active: bool) -> None:
+        self.sku = sku
+        self.price = price
+        self.stock = stock
+        self.is_active = is_active
+
+def make_product(d: ValidatedData) -> ProductRecord:
+    return ProductRecord(d.get_str("sku"), d.get_float("price"), d.get_int("stock"), d.get_bool("is_active"))
+
+prod_schema: Schema = Schema("Product")
+prod_schema.field_str("sku").min_length(3)
+prod_schema.field_float("price").min(0.0)
+prod_schema.field_int("stock").min_i(0)
+prod_schema.field_bool("is_active")
+
+prod_model: ModelSchema[ProductRecord] = ModelSchema[ProductRecord](prod_schema, make_product)
+prod_adapter: DbAdapter[ProductRecord] = DbAdapter[ProductRecord](prod_model)
+
+conn.execute("CREATE TABLE products (sku TEXT, price REAL, stock INTEGER, is_active INTEGER)")
+conn.execute("INSERT INTO products (sku, price, stock, is_active) VALUES ('PRD-001', 49.99, 100, 1)")
+conn.execute("INSERT INTO products (sku, price, stock, is_active) VALUES ('PRD-002', -10.0, -5, 99)")
+
+prod_rows: list[Row] = conn.query("SELECT sku, price, stock, is_active FROM products ORDER BY sku ASC")
+p1: ProductRecord = prod_adapter.parse_row(prod_rows[0])
+nox.test.assert_eq_str(p1.sku, "PRD-001", "sku matches")
+nox.test.assert_true(p1.price > 49.9 and p1.price < 50.0, "price preserved as float")
+nox.test.assert_eq_int(p1.stock, 100, "stock preserved as int")
+nox.test.assert_true(p1.is_active, "is_active parsed as true")
+
+# Row 2 has negative price, negative stock, and invalid bool (99)
+val_p2: ValidationResult = prod_adapter.validate_row(prod_rows[1])
+nox.test.assert_true(not val_p2.is_valid, "product 2 fails validation on bounds and bool type")
+nox.test.assert_eq_int(len(val_p2.errors), 3, "3 errors on bad product row")
+
 conn.close()
 print("db_adapter_test passed")

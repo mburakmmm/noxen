@@ -52,3 +52,6 @@ class ModelSchema[T]:
         obj: T = f(res.data)
         empty_errs: list[FieldError] = []
         return Result[T](True, obj, empty_errs)
+
+    def dump(self, data: ValidatedData) -> str:
+        return self.schema.dump(data)

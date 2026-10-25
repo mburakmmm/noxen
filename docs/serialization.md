@@ -86,7 +86,35 @@ print(user_s.build())
 
 ---
 
-## 6. Performance
+## 6. Automated Schema Serialization (Reflection-Free)
+
+Starting in `v0.3.2`, Noxen supports automated serialization directly from validated models and schemas using `dump(data: ValidatedData) -> str`:
+
+```nox
+import schema
+from schema import Schema
+
+# 1. Define schema with fields, aliases, and nested structures
+s: Schema = Schema("User")
+s.field_int("id")
+s.field_str("name").alias("full_name")
+s.field_str("bio").nullable().optional()
+
+# 2. Validate input
+res = s.validate_json("{\"id\": 42, \"full_name\": \"Grace Hopper\", \"bio\": null}")
+
+# 3. Automatically dump validated data back to JSON wire format
+output_json: str = s.dump(res.data)
+# {"id":42,"full_name":"Grace Hopper","bio":null}
+```
+
+### Key Collision Protection with `POLICY_ALLOW`
+
+When `POLICY_ALLOW` is enabled, extra properties present in `ValidatedData` are serialized automatically without duplicate key bugs. `Serializer` tracks all written keys (`has_written_key`) so that extra properties colliding with defined schema fields are safely ignored during output generation.
+
+---
+
+## 7. Performance
 
 Because `Serializer` streams directly to Zig's underlying string buffer via `JsonWriter`:
 * Generates over **780,000 JSON documents per second** on Apple Silicon ARM64.

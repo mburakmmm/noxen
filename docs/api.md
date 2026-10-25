@@ -42,6 +42,7 @@ The root validation engine for structured data.
 * `validate(v: JsonValue) -> ValidationResult`: Validates an in-memory `JsonValue` tree.
 * `validate_json(json_str: str) -> ValidationResult`: Parses and validates a JSON string.
 * `validate_row(row: Row) -> ValidationResult`: Validates a database `nox.db.Row` against schema constraints.
+* `dump(data: ValidatedData) -> str`: Automatically serializes validated data to JSON according to schema fields, aliases, nullability, nested models, and lists.
 * `to_json_schema() -> str`: Generates standard JSON Schema Draft 2020-12 specification with `$defs` and `$ref`.
 
 ### `Field` (`schema.nox` / `fields.nox`)
@@ -86,6 +87,7 @@ Generic wrapper mapping raw validated data into strongly typed Nox classes.
 * `validate(v: JsonValue) -> ValidationResult`: Validates `JsonValue` tree and returns `ValidationResult`.
 * `validate_json(json_str: str) -> ValidationResult`: Validates JSON text and returns `ValidationResult`.
 * `validate_row(row: Row) -> ValidationResult`: Validates database row and returns `ValidationResult`.
+* `dump(data: ValidatedData) -> str`: Automatically serializes validated data to JSON through the underlying schema.
 
 ### `Result[T]` (`core.nox`)
 Generic result container representing validation outcome.
@@ -118,7 +120,8 @@ Streaming fluent builder for high-performance JSON serialization.
 * `null(k)`
 * `list_str(k, items)`, `list_int(k, items)`, `list_float(k, items)`, `list_bool(k, items)`
 * `raw_json(k, json_text)`, `opt_raw_json(k, json_text)`
-* `include_extras(data: ValidatedData)`: Automatically serializes extra fields captured under `POLICY_ALLOW`.
+* `has_written_key(k: str) -> bool`: Checks if a JSON key has already been recorded by the serializer.
+* `include_extras(data: ValidatedData)`: Automatically serializes extra fields captured under `POLICY_ALLOW`. Checks `has_written_key` to guarantee duplicate keys are never emitted.
 * `build() -> str`
 
 ---

@@ -1,0 +1,89 @@
+# integer_precision_test.nox — Comprehensive integer precision and safe boundary test matrix.
+
+import nox.test
+import schema
+import core
+import errors
+from schema import Schema, Field, COERCION_STRICT, COERCION_LAX
+from core import ValidationResult
+from errors import CODE_TYPE_MISMATCH, CODE_OUT_OF_RANGE
+
+def test_safe_integer_boundaries() -> None:
+    s: Schema = Schema("SafeInt")
+    s.field_int("val")
+
+    # 1. Exact upper safe bound 2^53 - 1 (9007199254740991) -> ACCEPTED
+    r1: ValidationResult = s.validate_json("{\"val\": 9007199254740991}")
+    nox.test.assert_true(r1.is_valid, "9007199254740991 is within safe float64 integer range and accepted")
+    nox.test.assert_eq_int(r1.data.get_int("val"), 9007199254740991, "safe int value matches")
+
+    # 2. 2^53 (9007199254740992) -> REJECTED (unsafe precision)
+    r2: ValidationResult = s.validate_json("{\"val\": 9007199254740992}")
+    nox.test.assert_true(not r2.is_valid, "9007199254740992 is outside safe integer range and rejected")
+    nox.test.assert_eq_str(r2.errors[0].code, CODE_TYPE_MISMATCH, "code matches type mismatch")
+
+    # 3. 2^53 + 1 (9007199254740993) -> REJECTED (unsafe precision)
+    r3: ValidationResult = s.validate_json("{\"val\": 9007199254740993}")
+    nox.test.assert_true(not r3.is_valid, "9007199254740993 is outside safe integer range and rejected")
+    nox.test.assert_eq_str(r3.errors[0].code, CODE_TYPE_MISMATCH, "code matches type mismatch")
+
+    # 4. -2^53 (-9007199254740992) -> REJECTED (unsafe precision)
+    r4: ValidationResult = s.validate_json("{\"val\": -9007199254740992}")
+    nox.test.assert_true(not r4.is_valid, "-9007199254740992 is outside safe integer range and rejected")
+    nox.test.assert_eq_str(r4.errors[0].code, CODE_TYPE_MISMATCH, "code matches type mismatch")
+
+    # 5. Negative safe bound -(2^53 - 1) (-9007199254740991) -> ACCEPTED
+    r5: ValidationResult = s.validate_json("{\"val\": -9007199254740991}")
+    nox.test.assert_true(r5.is_valid, "-9007199254740991 is within safe float64 integer range and accepted")
+    nox.test.assert_eq_int(r5.data.get_int("val"), -9007199254740991, "neg safe int value matches")
+
+def test_lax_64bit_integer_coercion_and_overflow() -> None:
+    s: Schema = Schema("Lax64")
+    s.field_int("big_id")
+    s.set_coercion(COERCION_LAX)
+
+    # 1. 64-bit maximum integer as string "9223372036854775807" -> ACCEPTED
+    r1: ValidationResult = s.validate_json("{\"big_id\": \"9223372036854775807\"}")
+    nox.test.assert_true(r1.is_valid, "Max 64-bit int string is safely parsed in lax mode")
+    nox.test.assert_eq_int(r1.data.get_int("big_id"), 9223372036854775807, "max int64 matches")
+
+    # 2. 64-bit minimum integer as string "-9223372036854775808" -> ACCEPTED
+    r2: ValidationResult = s.validate_json("{\"big_id\": \"-9223372036854775808\"}")
+    nox.test.assert_true(r2.is_valid, "Min 64-bit int string is safely parsed in lax mode")
+    min_int64: int = -9223372036854775807 - 1
+    nox.test.assert_eq_int(r2.data.get_int("big_id"), min_int64, "min int64 matches")
+
+    # 3. 64-bit overflow "9223372036854775808" -> REJECTED with TYPE_MISMATCH
+    r3: ValidationResult = s.validate_json("{\"big_id\": \"9223372036854775808\"}")
+    nox.test.assert_true(not r3.is_valid, "64-bit overflow string is rejected without crash")
+    nox.test.assert_eq_str(r3.errors[0].code, CODE_TYPE_MISMATCH, "code matches type mismatch")
+
+    # 4. 64-bit underflow "-9223372036854775809" -> REJECTED with TYPE_MISMATCH
+    r4: ValidationResult = s.validate_json("{\"big_id\": \"-9223372036854775809\"}")
+    nox.test.assert_true(not r4.is_valid, "64-bit underflow string is rejected without crash")
+    nox.test.assert_eq_str(r4.errors[0].code, CODE_TYPE_MISMATCH, "code matches type mismatch")
+
+def test_exact_int_bounds() -> None:
+    s: Schema = Schema("Bounds")
+    f: Field = s.field_int("counter")
+    f.min_i(100)
+    f.max_i(200)
+
+    # Valid
+    r1: ValidationResult = s.validate_json("{\"counter\": 150}")
+    nox.test.assert_true(r1.is_valid, "150 is within [100, 200]")
+
+    # Below min
+    r2: ValidationResult = s.validate_json("{\"counter\": 99}")
+    nox.test.assert_true(not r2.is_valid, "99 is below min_i(100)")
+    nox.test.assert_eq_str(r2.errors[0].code, CODE_OUT_OF_RANGE, "code matches out of range")
+
+    # Above max
+    r3: ValidationResult = s.validate_json("{\"counter\": 201}")
+    nox.test.assert_true(not r3.is_valid, "201 is above max_i(200)")
+    nox.test.assert_eq_str(r3.errors[0].code, CODE_OUT_OF_RANGE, "code matches out of range")
+
+test_safe_integer_boundaries()
+test_lax_64bit_integer_coercion_and_overflow()
+test_exact_int_bounds()
+print("integer_precision_test passed")

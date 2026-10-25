@@ -2,7 +2,7 @@
 
 > **Statically typed data modeling, parsing, validation, and serialization for the Nox programming language.**
 >
-> Maturity status: **v0.3.1 — High-Assurance Validation & Precision Release**. Verified against `noxc 2.0.27+`.
+> Maturity status: **v0.3.2 — Automated Serialization & Boundary Precision Release**. Verified against `noxc 2.0.27+`.
 
 ---
 
@@ -47,7 +47,7 @@ Add Noxen to your project's `nox.json`:
     {
       "alias": "noxen",
       "repo": "github.com/mburakmmm/noxen",
-      "ref": "v0.3.1"
+      "ref": "v0.3.2"
     }
   ]
 }
@@ -62,7 +62,7 @@ noxc fetch
 Or install via `noxc`:
 
 ```sh
-noxc add noxen github.com/mburakmmm/noxen --ref v0.3.1
+noxc add noxen github.com/mburakmmm/noxen --ref v0.3.2
 ```
 
 ---
@@ -240,9 +240,28 @@ print(company.name, "is in", company.address.city)
 
 ---
 
-## JSON Round-Trip Serialization
+## JSON Round-Trip & Automated Serialization
 
-Use `Serializer` to build compact, deterministic JSON:
+### Automated Schema-Driven Serialization
+
+With `v0.3.2`, you can automatically dump validated data without handwriting manual serializers or using runtime reflection:
+
+```nox
+# Dump directly via Schema or ModelSchema
+dumped_json: str = user_schema.dump(res.data)
+# Or through model:
+dumped_json: str = model.dump(res.data)
+```
+
+`Schema.dump()` automatically handles:
+* Field aliases (wire format matching `.alias("jsonKey")`)
+* Nullable fields (`null`) and absent optional fields (omitted)
+* Recursively serialized nested models and lists of objects
+* Extra attributes under `POLICY_ALLOW` without key collisions
+
+### Programmatic Serialization with Collision Avoidance
+
+For custom control, use `Serializer` to build compact, deterministic JSON:
 
 ```nox
 import serialization
@@ -252,6 +271,8 @@ s: Serializer = Serializer()
 s.str("name", "Ada")
 s.int("age", 36)
 s.opt_str("bio", None) # Produces "bio": null
+# Automatically pass through allowed extras without duplicate keys:
+s.include_extras(res.data)
 print(s.build())
 # Output: {"name":"Ada","age":36,"bio":null}
 ```

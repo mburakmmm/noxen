@@ -1,0 +1,135 @@
+# auto_dump_test.nox — Automated schema-driven serialization and collision-safe extras test.
+
+import nox.test
+import nox.json
+import nox.strings
+import schema
+import models
+import serialization
+from schema import Schema, Field, POLICY_ALLOW, POLICY_FORBID
+from models import ModelSchema
+from core import ValidatedData, ValidationResult, Result
+from serialization import Serializer
+
+class Address:
+    city: str
+    zip_code: str
+
+    def __init__(self, city: str, zip_code: str) -> None:
+        self.city = city
+        self.zip_code = zip_code
+
+class User:
+    id: int
+    name: str
+    bio: str | None
+    addr: Address
+
+    def __init__(self, id: int, name: str, bio: str | None, addr: Address) -> None:
+        self.id = id
+        self.name = name
+        self.bio = bio
+        self.addr = addr
+
+def make_address(d: ValidatedData) -> Address:
+    return Address(d.get_str("city"), d.get_str("zip_code"))
+
+def make_user(d: ValidatedData) -> User:
+    addr_d: ValidatedData = d.get_object("addr")
+    return User(
+        d.get_int("id"),
+        d.get_str("name"),
+        d.get_opt_str("bio"),
+        make_address(addr_d)
+    )
+
+def test_schema_auto_dump() -> None:
+    addr_s: Schema = Schema("Address")
+    addr_s.field_str("city")
+    addr_s.field_str("zip_code")
+
+    user_s: Schema = Schema("User")
+    user_s.field_int("id")
+    f_name: Field = user_s.field_str("name")
+    f_name.alias("full_name")
+    user_s.field_str("bio").nullable().optional()
+    user_s.field_list("tags", "string")
+    user_s.field_object("addr", addr_s)
+
+    input_json: str = "{\"id\": 101, \"full_name\": \"Burak\", \"bio\": null, \"tags\": [\"admin\", \"dev\"], \"addr\": {\"city\": \"Istanbul\", \"zip_code\": \"34000\"}}"
+    res: ValidationResult = user_s.validate_json(input_json)
+    nox.test.assert_true(res.is_valid, "input validation valid")
+
+    # Automated serialization via Schema.dump
+    dumped: str = user_s.dump(res.data)
+    nox.test.assert_true(nox.strings.contains(dumped, "\"id\":101"), "contains id")
+    nox.test.assert_true(nox.strings.contains(dumped, "\"full_name\":\"Burak\""), "uses alias full_name")
+    nox.test.assert_true(nox.strings.contains(dumped, "\"bio\":null"), "contains bio:null")
+    nox.test.assert_true(nox.strings.contains(dumped, "\"tags\":[\"admin\",\"dev\"]"), "contains tags list")
+    nox.test.assert_true(nox.strings.contains(dumped, "\"city\":\"Istanbul\""), "contains nested city")
+    nox.test.assert_true(nox.strings.contains(dumped, "\"zip_code\":\"34000\""), "contains nested zip_code")
+
+    # Roundtrip: parse dumped output back into schema
+    roundtrip: ValidationResult = user_s.validate_json(dumped)
+    nox.test.assert_true(roundtrip.is_valid, "dumped json roundtrips back into schema")
+    nox.test.assert_eq_int(roundtrip.data.get_int("id"), 101, "roundtrip id matches")
+    nox.test.assert_eq_str(roundtrip.data.get_str("name"), "Burak", "roundtrip name matches")
+
+def test_model_schema_dump() -> None:
+    addr_s: Schema = Schema("Address")
+    addr_s.field_str("city")
+    addr_s.field_str("zip_code")
+
+    user_s: Schema = Schema("User")
+    user_s.field_int("id")
+    user_s.field_str("name")
+    user_s.field_str("bio").nullable().optional()
+    user_s.field_object("addr", addr_s)
+
+    m: ModelSchema[User] = ModelSchema[User](user_s, make_user)
+    parsed: Result[User] = m.parse_json("{\"id\": 202, \"name\": \"NoxUser\", \"addr\": {\"city\": \"Ankara\", \"zip_code\": \"06000\"}}")
+    nox.test.assert_true(parsed.is_ok, "Model parsed successfully")
+
+    # Dump via ModelSchema[T].dump
+    vdata: ValidatedData = user_s.validate_json("{\"id\": 202, \"name\": \"NoxUser\", \"addr\": {\"city\": \"Ankara\", \"zip_code\": \"06000\"}}").data
+    dumped: str = m.dump(vdata)
+    nox.test.assert_true(nox.strings.contains(dumped, "\"id\":202"), "contains id")
+    nox.test.assert_true(nox.strings.contains(dumped, "\"name\":\"NoxUser\""), "contains name")
+    nox.test.assert_true(not nox.strings.contains(dumped, "\"bio\""), "omits absent bio")
+
+def test_serializer_key_collision_avoidance() -> None:
+    ser: Serializer = Serializer()
+    ser.int("id", 42)
+    ser.str("title", "Existing")
+
+    # Simulate ValidatedData with extra fields, one of which collides with 'id'
+    d: ValidatedData = ValidatedData()
+    d.set_extra("id", "999")
+    d.set_extra("role", "\"superadmin\"")
+
+    ser.include_extras(d)
+    out: str = ser.build()
+
+    # 'id' must appear only once in the JSON output, with value 42
+    nox.test.assert_true(nox.strings.contains(out, "\"id\":42"), "preserves original id")
+    nox.test.assert_true(not nox.strings.contains(out, "999"), "excludes collided extra id")
+    nox.test.assert_true(nox.strings.contains(out, "\"role\":\"superadmin\""), "includes non-colliding extra")
+
+def test_schema_dump_with_policy_allow_and_extras() -> None:
+    s: Schema = Schema("Config")
+    s.field_str("host")
+    s.set_policy(POLICY_ALLOW)
+
+    input_json: str = "{\"host\": \"localhost\", \"extra_env\": \"prod\"}"
+    res: ValidationResult = s.validate_json(input_json)
+    nox.test.assert_true(res.is_valid, "valid under POLICY_ALLOW")
+
+    dumped: str = s.dump(res.data)
+    nox.test.assert_true(nox.strings.contains(dumped, "\"host\":\"localhost\""), "contains host")
+    nox.test.assert_true(nox.strings.contains(dumped, "\"extra_env\":\"prod\""), "contains extra_env")
+
+test_schema_auto_dump()
+test_model_schema_dump()
+test_serializer_key_collision_avoidance()
+test_schema_dump_with_policy_allow_and_extras()
+print("auto_dump_test passed")

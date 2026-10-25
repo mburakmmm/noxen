@@ -7,32 +7,51 @@ from core import ValidatedData
 
 class Serializer:
     _w: JsonWriter
+    _written_keys: list[str]
 
     def __init__(self: Serializer) -> None:
         self._w = JsonWriter()
+        self._written_keys = []
         self._w.begin_object()
 
+    def _record_key(self: Serializer, k: str) -> None:
+        self._written_keys.append(k)
+
+    def has_written_key(self: Serializer, k: str) -> bool:
+        i: int = 0
+        while i < len(self._written_keys):
+            if self._written_keys[i] == k:
+                return True
+            i = i + 1
+        return False
+
     def str(self: Serializer, k: str, v: str) -> None:
+        self._record_key(k)
         self._w.write_key(k)
         self._w.write_string(v)
 
     def int(self: Serializer, k: str, v: int) -> None:
+        self._record_key(k)
         self._w.write_key(k)
         self._w.write_int(v)
 
     def float(self: Serializer, k: str, v: float) -> None:
+        self._record_key(k)
         self._w.write_key(k)
         self._w.write_float(v)
 
     def bool(self: Serializer, k: str, v: bool) -> None:
+        self._record_key(k)
         self._w.write_key(k)
         self._w.write_bool(v)
 
     def null(self: Serializer, k: str) -> None:
+        self._record_key(k)
         self._w.write_key(k)
         self._w.write_null()
 
     def opt_str(self: Serializer, k: str, v: str | None) -> None:
+        self._record_key(k)
         self._w.write_key(k)
         if v is None:
             self._w.write_null()
@@ -40,6 +59,7 @@ class Serializer:
             self._w.write_string(v)
 
     def opt_int(self: Serializer, k: str, v: int | None) -> None:
+        self._record_key(k)
         self._w.write_key(k)
         if v is None:
             self._w.write_null()
@@ -47,6 +67,7 @@ class Serializer:
             self._w.write_int(v)
 
     def opt_float(self: Serializer, k: str, v: float | None) -> None:
+        self._record_key(k)
         self._w.write_key(k)
         if v is None:
             self._w.write_null()
@@ -54,6 +75,7 @@ class Serializer:
             self._w.write_float(v)
 
     def opt_bool(self: Serializer, k: str, v: bool | None) -> None:
+        self._record_key(k)
         self._w.write_key(k)
         if v is None:
             self._w.write_null()
@@ -61,6 +83,7 @@ class Serializer:
             self._w.write_bool(v)
 
     def list_str(self: Serializer, k: str, items: list[str]) -> None:
+        self._record_key(k)
         self._w.write_key(k)
         self._w.begin_array()
         i: int = 0
@@ -70,6 +93,7 @@ class Serializer:
         self._w.end_array()
 
     def list_int(self: Serializer, k: str, items: list[int]) -> None:
+        self._record_key(k)
         self._w.write_key(k)
         self._w.begin_array()
         i: int = 0
@@ -79,6 +103,7 @@ class Serializer:
         self._w.end_array()
 
     def list_float(self: Serializer, k: str, items: list[float]) -> None:
+        self._record_key(k)
         self._w.write_key(k)
         self._w.begin_array()
         i: int = 0
@@ -88,6 +113,7 @@ class Serializer:
         self._w.end_array()
 
     def list_bool(self: Serializer, k: str, items: list[bool]) -> None:
+        self._record_key(k)
         self._w.write_key(k)
         self._w.begin_array()
         i: int = 0
@@ -97,11 +123,13 @@ class Serializer:
         self._w.end_array()
 
     def raw_json(self: Serializer, k: str, json_text: str) -> None:
+        self._record_key(k)
         self._w.write_key(k)
         v: JsonValue = nox.json.parse(json_text)
         self._w.write_value(v)
 
     def opt_raw_json(self: Serializer, k: str, json_text: str | None) -> None:
+        self._record_key(k)
         self._w.write_key(k)
         if json_text is None:
             self._w.write_null()
@@ -114,8 +142,9 @@ class Serializer:
         i: int = 0
         while i < len(keys):
             k: str = keys[i]
-            v_json: str = data.get_extra(k)
-            self.raw_json(k, v_json)
+            if not self.has_written_key(k):
+                v_json: str = data.get_extra(k)
+                self.raw_json(k, v_json)
             i = i + 1
 
     def build(self: Serializer) -> str:
