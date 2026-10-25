@@ -18,6 +18,8 @@ class ValidatedData:
     _list_objs: dict[str, list[ValidatedData]]
     _nulls: list[str]
     _present: list[str]
+    _extras: dict[str, str]
+    _extra_keys: list[str]
 
     def __init__(self: ValidatedData) -> None:
         self._strs = {}
@@ -32,6 +34,8 @@ class ValidatedData:
         self._list_objs = {}
         self._nulls = []
         self._present = []
+        self._extras = {}
+        self._extra_keys = []
 
     def set_str(self: ValidatedData, k: str, v: str) -> None:
         self._strs[k] = v
@@ -170,6 +174,21 @@ class ValidatedData:
             empty: list[ValidatedData] = []
             return empty
         return self._list_objs[k]
+
+    def set_extra(self: ValidatedData, k: str, json_repr: str) -> None:
+        self._extras[k] = json_repr
+        self._extra_keys.append(k)
+
+    def has_extra(self: ValidatedData, k: str) -> bool:
+        return k in self._extras
+
+    def get_extra(self: ValidatedData, k: str) -> str:
+        if k in self._extras:
+            return self._extras[k]
+        return ""
+
+    def get_extra_keys(self: ValidatedData) -> list[str]:
+        return self._extra_keys
 
 class ValidationResult:
     is_valid: bool

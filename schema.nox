@@ -1,7 +1,7 @@
 # schema.nox — Declarative schema definition, validation engine, and JSON Schema generation.
 
 import errors
-from errors import FieldError, CODE_INVALID_JSON, CODE_EXPECTED_OBJECT, CODE_MISSING_FIELD, CODE_UNEXPECTED_NULL, CODE_TYPE_MISMATCH, CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE, CODE_STRING_TOO_SHORT, CODE_STRING_TOO_LONG, CODE_INVALID_EMAIL, CODE_INVALID_URL, CODE_INVALID_UUID, CODE_PATTERN_MISMATCH, CODE_CHOICE_MISMATCH, CODE_ARRAY_TOO_SHORT, CODE_ARRAY_TOO_LONG, CODE_RECURSION_LIMIT, CODE_MAX_ERRORS_EXCEEDED
+from errors import FieldError, CODE_INVALID_JSON, CODE_EXPECTED_OBJECT, CODE_MISSING_FIELD, CODE_UNEXPECTED_NULL, CODE_TYPE_MISMATCH, CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE, CODE_STRING_TOO_SHORT, CODE_STRING_TOO_LONG, CODE_INVALID_EMAIL, CODE_INVALID_URL, CODE_INVALID_UUID, CODE_INVALID_DATE, CODE_INVALID_TIME, CODE_INVALID_DATETIME, CODE_PATTERN_MISMATCH, CODE_CHOICE_MISMATCH, CODE_ARRAY_TOO_SHORT, CODE_ARRAY_TOO_LONG, CODE_RECURSION_LIMIT, CODE_MAX_ERRORS_EXCEEDED
 import validators
 import core
 from core import ValidatedData, ValidationResult
@@ -19,6 +19,7 @@ MODE_OPTIONAL_NULLABLE: int = 3
 # Unknown field policies
 POLICY_FORBID: int = 0
 POLICY_IGNORE: int = 1
+POLICY_ALLOW: int = 2
 
 # Coercion modes
 COERCION_STRICT: int = 0
@@ -103,6 +104,10 @@ class Field:
     nested_schema: Schema | None
     item_schema: Schema | None
     description: str
+    is_secret: bool
+    is_date: bool
+    is_time: bool
+    is_datetime: bool
 
     def __init__(self: Field, name: str, kind: str) -> None:
         self.name = name
@@ -136,6 +141,10 @@ class Field:
         self.nested_schema = None
         self.item_schema = None
         self.description = ""
+        self.is_secret = False
+        self.is_date = False
+        self.is_time = False
+        self.is_datetime = False
 
     def alias(self: Field, json_key: str) -> Field:
         self.json_name = json_key
@@ -251,6 +260,25 @@ class Field:
 
     def uuid(self: Field) -> Field:
         self.fmt = "uuid"
+        return self
+
+    def date(self: Field) -> Field:
+        self.is_date = True
+        self.fmt = "date"
+        return self
+
+    def time(self: Field) -> Field:
+        self.is_time = True
+        self.fmt = "time"
+        return self
+
+    def datetime(self: Field) -> Field:
+        self.is_datetime = True
+        self.fmt = "date-time"
+        return self
+
+    def secret(self: Field) -> Field:
+        self.is_secret = True
         return self
 
     def describe(self: Field, desc: str) -> Field:
@@ -372,6 +400,16 @@ class Schema:
                         err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED, "Error limit reached", str(self.max_errors), str(len(err_list))))
                         return ValidationResult(False, data, err_list)
                 ki = ki + 1
+        elif self.policy == POLICY_ALLOW:
+            n_keys_allow: int = nox.json.object_len(v)
+            ki_allow: int = 0
+            while ki_allow < n_keys_allow:
+                k_allow: str = nox.json.object_key(v, ki_allow)
+                matched_allow: Field | None = self.get_field(k_allow)
+                if matched_allow is None:
+                    extra_val: JsonValue = nox.json.object_value(v, ki_allow)
+                    data.set_extra(k_allow, nox.json.dump(extra_val))
+                ki_allow = ki_allow + 1
 
         # Field validations in schema order
         fi: int = 0
@@ -431,6 +469,10 @@ class Schema:
                             )
                         else:
                             sv: str = sv_opt
+                            actual_repr: str = sv
+                            if field.is_secret:
+                                actual_repr = "[REDACTED]"
+
                             if field.has_min_len and len(sv) < field.min_len:
                                 err_list.append(
                                     FieldError(full_path, CODE_STRING_TOO_SHORT, "Field '" + full_path + "' must have at least " + str(field.min_len) + " characters", "length >= " + str(field.min_len), str(len(sv)))
@@ -448,23 +490,35 @@ class Schema:
                                     ci = ci + 1
                                 if not matched_choice:
                                     err_list.append(
-                                        FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed choices", "choice", sv)
+                                        FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed choices", "choice", actual_repr)
                                     )
                             if len(field.pattern) > 0 and not nox.regex.is_match(field.pattern, sv):
                                 err_list.append(
-                                    FieldError(full_path, CODE_PATTERN_MISMATCH, "Field '" + full_path + "' does not match pattern: " + field.pattern, field.pattern, sv)
+                                    FieldError(full_path, CODE_PATTERN_MISMATCH, "Field '" + full_path + "' does not match pattern: " + field.pattern, field.pattern, actual_repr)
                                 )
                             if field.fmt == "email" and not validators.is_valid_email(sv):
                                 err_list.append(
-                                    FieldError(full_path, CODE_INVALID_EMAIL, "Field '" + full_path + "' is not a valid email address", "email", sv)
+                                    FieldError(full_path, CODE_INVALID_EMAIL, "Field '" + full_path + "' is not a valid email address", "email", actual_repr)
                                 )
                             if field.fmt == "url" and not validators.is_valid_url(sv):
                                 err_list.append(
-                                    FieldError(full_path, CODE_INVALID_URL, "Field '" + full_path + "' is not a valid absolute URL", "url", sv)
+                                    FieldError(full_path, CODE_INVALID_URL, "Field '" + full_path + "' is not a valid absolute URL", "url", actual_repr)
                                 )
                             if field.fmt == "uuid" and not validators.is_valid_uuid(sv):
                                 err_list.append(
-                                    FieldError(full_path, CODE_INVALID_UUID, "Field '" + full_path + "' is not a valid UUID", "uuid", sv)
+                                    FieldError(full_path, CODE_INVALID_UUID, "Field '" + full_path + "' is not a valid UUID", "uuid", actual_repr)
+                                )
+                            if field.fmt == "date" and not validators.is_valid_date(sv):
+                                err_list.append(
+                                    FieldError(full_path, CODE_INVALID_DATE, "Field '" + full_path + "' is not a valid ISO 8601 date (YYYY-MM-DD)", "date", actual_repr)
+                                )
+                            if field.fmt == "time" and not validators.is_valid_time(sv):
+                                err_list.append(
+                                    FieldError(full_path, CODE_INVALID_TIME, "Field '" + full_path + "' is not a valid ISO 8601 time (HH:MM:SS)", "time", actual_repr)
+                                )
+                            if field.fmt == "date-time" and not validators.is_valid_datetime(sv):
+                                err_list.append(
+                                    FieldError(full_path, CODE_INVALID_DATETIME, "Field '" + full_path + "' is not a valid ISO 8601 datetime", "date-time", actual_repr)
                                 )
                             data.set_str(field.name, sv)
 
@@ -733,6 +787,46 @@ class Schema:
         w.write_key("type")
         w.write_string("object")
 
+        # Collect definitions for $defs
+        defs: list[Schema] = []
+        di: int = 0
+        while di < len(self.fields):
+            df: Field = self.fields[di]
+            df_ns: Schema | None = df.nested_schema
+            if df_ns != None:
+                already: bool = False
+                si: int = 0
+                while si < len(defs):
+                    if defs[si].name == df_ns.name:
+                        already = True
+                    si = si + 1
+                if not already:
+                    defs.append(df_ns)
+            df_is: Schema | None = df.item_schema
+            if df_is != None:
+                already_it: bool = False
+                si2: int = 0
+                while si2 < len(defs):
+                    if defs[si2].name == df_is.name:
+                        already_it = True
+                    si2 = si2 + 1
+                if not already_it:
+                    defs.append(df_is)
+            di = di + 1
+
+        if len(defs) > 0:
+            w.write_key("$defs")
+            w.begin_object()
+            sdi: int = 0
+            while sdi < len(defs):
+                sub_s: Schema = defs[sdi]
+                w.write_key(sub_s.name)
+                sub_json: str = sub_s.to_json_schema()
+                sub_val: JsonValue = nox.json.parse(sub_json)
+                w.write_value(sub_val)
+                sdi = sdi + 1
+            w.end_object()
+
         # Properties
         w.write_key("properties")
         w.begin_object()
@@ -817,6 +911,15 @@ class Schema:
                 w.write_key("type")
                 w.write_string("boolean")
 
+            elif f.kind == "object":
+                f_ns: Schema | None = f.nested_schema
+                if f_ns != None:
+                    w.write_key("$ref")
+                    w.write_string("#/$defs/" + f_ns.name)
+                else:
+                    w.write_key("type")
+                    w.write_string("object")
+
             elif f.kind == "list":
                 w.write_key("type")
                 w.write_string("array")
@@ -828,7 +931,11 @@ class Schema:
                     w.write_int(f.max_items)
                 w.write_key("items")
                 w.begin_object()
-                if f.item_kind == "string":
+                f_is: Schema | None = f.item_schema
+                if f_is != None:
+                    w.write_key("$ref")
+                    w.write_string("#/$defs/" + f_is.name)
+                elif f.item_kind == "string":
                     w.write_key("type")
                     w.write_string("string")
                 elif f.item_kind == "int":
@@ -841,6 +948,17 @@ class Schema:
                     w.write_key("type")
                     w.write_string("boolean")
                 w.end_object()
+
+            if f.has_default:
+                w.write_key("default")
+                if f.kind == "string":
+                    w.write_string(f.default_str)
+                elif f.kind == "int":
+                    w.write_int(f.default_int)
+                elif f.kind == "float":
+                    w.write_float(f.default_float)
+                elif f.kind == "bool":
+                    w.write_bool(f.default_bool)
 
             if len(f.description) > 0:
                 w.write_key("description")
@@ -871,7 +989,7 @@ class Schema:
         w.end_array()
 
         w.write_key("additionalProperties")
-        w.write_bool(self.policy == POLICY_IGNORE)
+        w.write_bool(self.policy != POLICY_FORBID)
 
         w.end_object()
         return w.build()

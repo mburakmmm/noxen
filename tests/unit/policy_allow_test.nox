@@ -1,0 +1,30 @@
+# tests/unit/policy_allow_test.nox
+# Verifies POLICY_ALLOW policy and extra field preservation in ValidatedData.
+
+import nox.test
+import schema
+import core
+from schema import Schema, POLICY_ALLOW
+from core import ValidationResult, ValidatedData
+
+s: Schema = Schema("FlexibleUser")
+s.field_str("name")
+s.field_int("age")
+s.set_policy(POLICY_ALLOW)
+
+payload: str = "{\"name\":\"Alice\",\"age\":30,\"extra_tag\":\"vip\",\"extra_count\":5}"
+res: ValidationResult = s.validate_json(payload)
+
+nox.test.assert_true(res.is_valid, "POLICY_ALLOW accepts unknown fields without error")
+d: ValidatedData = res.data
+
+nox.test.assert_eq_str(d.get_str("name"), "Alice", "name is stored")
+nox.test.assert_eq_int(d.get_int("age"), 30, "age is stored")
+
+# Check extras
+nox.test.assert_true(d.has_extra("extra_tag"), "has extra_tag")
+nox.test.assert_true(d.has_extra("extra_count"), "has extra_count")
+nox.test.assert_eq_int(len(d.get_extra_keys()), 2, "2 extra keys recorded")
+nox.test.assert_eq_str(d.get_extra("extra_tag"), "\"vip\"", "extra_tag JSON value is preserved")
+
+print("policy_allow_test passed")

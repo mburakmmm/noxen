@@ -5,6 +5,27 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-10-26
+
+### Added
+- **ISO 8601 Date & Time Constraints**:
+  - `.date()` validates calendar dates (`YYYY-MM-DD`, with leap year verification).
+  - `.time()` validates 24-hour time (`HH:MM:SS` with optional timezone/fractional seconds).
+  - `.datetime()` validates combined ISO 8601 timestamps (`YYYY-MM-DDTHH:MM:SS[Z]`).
+  - Added stable error codes `CODE_INVALID_DATE`, `CODE_INVALID_TIME`, `CODE_INVALID_DATETIME`.
+- **Sensitive Data Redaction**:
+  - `.secret()` marks sensitive credentials (passwords, tokens, keys). Error outputs automatically replace raw actual values with `[REDACTED]`.
+- **Unknown Fields Preservation Policy (`POLICY_ALLOW`)**:
+  - `POLICY_ALLOW` permits extra JSON properties and stores them safely in `ValidatedData` accessible via `get_extra_keys()` and `get_extra(key)`.
+- **JSON Schema `$defs` / `$ref` Support**:
+  - Nested schemas are extracted into a top-level `$defs` dictionary and referenced with `{"$ref": "#/$defs/ModelName"}` according to JSON Schema Draft 2020-12.
+- **Fuzz & Adversarial Test Suite**:
+  - `tests/fuzz/fuzz_test.nox` tests malformed JSON, boundary attacks, deep nesting recursion limit enforcement, error caps, and multi-byte Unicode.
+- **Multi-OS CI Matrix**:
+  - Updated `.github/workflows/ci.yml` with a cross-platform test matrix running on both Linux (`ubuntu-latest`) and macOS (`macos-latest`).
+- **Complete Modular Documentation**:
+  - Added `docs/api.md`, `docs/security.md`, `docs/roadmap.md`, `docs/migration.md`, and `docs/serialization.md`.
+
 ## [0.2.0] - 2026-10-26
 
 ### Added

@@ -1,0 +1,23 @@
+# tests/unit/json_schema_defs_test.nox
+# Verifies $defs and $ref generation in JSON Schema Draft 2020-12.
+
+import nox.test
+import schema
+import nox.strings
+from schema import Schema
+
+addr_schema: Schema = Schema("Address")
+addr_schema.field_str("street").min_length(1)
+addr_schema.field_str("city").min_length(1)
+
+user_schema: Schema = Schema("User")
+user_schema.field_str("name")
+user_schema.field_object("address", addr_schema)
+user_schema.field_list_schema("previous_addresses", addr_schema)
+
+js: str = user_schema.to_json_schema()
+nox.test.assert_true(nox.strings.contains(js, "\"$defs\""), "schema has $defs block")
+nox.test.assert_true(nox.strings.contains(js, "\"$ref\":\"#/$defs/Address\""), "schema references Address via $ref")
+nox.test.assert_true(nox.strings.contains(js, "\"title\":\"User\""), "schema has title User")
+
+print("json_schema_defs_test passed")

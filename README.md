@@ -2,7 +2,7 @@
 
 > **Statically typed data modeling, parsing, validation, and serialization for the Nox programming language.**
 >
-> Maturity status: **v0.2.0 — Production-Ready Core & Ecosystem Adapters**. Verified against `noxc 2.0.27+`.
+> Maturity status: **v0.3.0 — Comprehensive Hardening & Security Release**. Verified against `noxc 2.0.27+`.
 
 ---
 
@@ -47,7 +47,7 @@ Add Noxen to your project's `nox.json`:
     {
       "alias": "noxen",
       "repo": "github.com/mburakmmm/noxen",
-      "ref": "v0.2.0"
+      "ref": "v0.3.0"
     }
   ]
 }
@@ -62,7 +62,7 @@ noxc fetch
 Or install via `noxc`:
 
 ```sh
-noxc add noxen github.com/mburakmmm/noxen --ref v0.2.0
+noxc add noxen github.com/mburakmmm/noxen --ref v0.3.0
 ```
 
 ---
@@ -305,7 +305,9 @@ noxc run benchmarks/run_benchmarks.nox
 | Primitive types (`string`, `int`, `float`, `bool`) | Supported | Strict validation, int precision checks |
 | Optional vs Nullable fields | Supported | 4 presence modes (`REQUIRED`, `REQUIRED_NULLABLE`, `OPTIONAL`, `OPTIONAL_NULLABLE`) |
 | Default values | Supported | Applied only on missing fields |
-| Format validation | Supported | Email, URL (`nox.url`), UUID |
+| Format validation | Supported | Email, URL (`nox.url`), UUID, Date, Time, Datetime |
+| ISO 8601 Date & Time | Supported | `.date()`, `.time()`, `.datetime()` with leap year checks |
+| Sensitive Data Redaction | Supported | `.secret()` masks credentials as `[REDACTED]` in errors |
 | String length & regex bounds | Supported | `min_length`, `max_length`, `regex` |
 | Numeric bounds | Supported | `min`, `max`, `ge`, `le`, `gt`, `lt` |
 | Choices & Enums | Supported | `in_choices` (strings), `in_choices_int` (integers) |
@@ -314,12 +316,12 @@ noxc run benchmarks/run_benchmarks.nox
 | Nested models (`object`) | Supported | Full recursive path validation with `max_depth` caps |
 | Arrays / Collections | Supported | Lists of primitives and lists of objects |
 | Coercion Modes | Supported | `COERCION_STRICT` (default) & `COERCION_LAX` |
-| Unknown fields policy | Supported | `POLICY_FORBID` (default) & `POLICY_IGNORE` |
+| Unknown fields policy | Supported | `POLICY_FORBID` (default), `POLICY_IGNORE`, `POLICY_ALLOW` |
 | Resource Limits | Supported | `max_depth = 32`, `max_errors = 50` caps |
 | Custom validator hooks | Supported | Cross-field callbacks via `add_validator` |
 | Typed Model Binding | Supported | Zero-cost monomorphised `ModelSchema[T]` |
 | JSON Serialization | Supported | Streaming `Serializer` builder |
-| JSON Schema Draft 2020-12 | Supported | Standard-compliant schema generator |
+| JSON Schema Draft 2020-12 | Supported | Standard generator with `$defs` and `$ref` |
 | Aether Web Adapter | Supported | `json_422`, `json_200`, `json_201` for `nox.http` |
 | Nyx Database Adapter | Supported | `DbAdapter[T]`, `row_to_validated_data` for `nox.db.Row` |
 
@@ -333,35 +335,45 @@ Run the full test suite with:
 noxc test
 ```
 
-All 15 test suites pass cleanly:
+All 20 unit, integration, and fuzz test suites pass cleanly across Linux and macOS CI:
 
 ```text
 alias_test passed
 choices_test passed
 coercion_test passed
 custom_validator_test passed
+datetime_test passed
+db_adapter_test passed
 errors_test passed
 fields_test passed
+fuzz_test passed
+http_adapter_test passed
+json_schema_defs_test passed
 json_schema_test passed
 limits_test passed
 nested_profile_test passed
+policy_allow_test passed
+secret_redaction_test passed
 serialization_test passed
 unknown_fields_test passed
 user_model_test passed
 validators_test passed
-db_adapter_test passed
-http_adapter_test passed
 
-15 passed, 0 failed (15 total)
+20 passed, 0 failed (20 total)
 ```
 
 ---
 
-## Contributing & License
+## Documentation & License
 
 * Contributing & Invariants: See [AGENTS.md](AGENTS.md).
+* API Reference: See [docs/api.md](docs/api.md).
 * Architecture: See [docs/architecture.md](docs/architecture.md).
 * Validation Specs: See [docs/validation.md](docs/validation.md).
+* Serialization Guide: See [docs/serialization.md](docs/serialization.md).
+* Security & Robustness: See [docs/security.md](docs/security.md).
 * Compatibility Matrix: See [docs/compatibility.md](docs/compatibility.md).
 * Integrations Guide: See [docs/integrations.md](docs/integrations.md).
+* Roadmap: See [docs/roadmap.md](docs/roadmap.md).
+* Migration Guide: See [docs/migration.md](docs/migration.md).
 * License: [MIT](LICENSE)

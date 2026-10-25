@@ -1,0 +1,91 @@
+# tests/fuzz/fuzz_test.nox
+# Adversarial, fuzz, boundary, and resource exhaustion tests for Noxen.
+
+import nox.test
+import schema
+import core
+import errors
+from schema import Schema
+from core import ValidationResult
+from errors import CODE_INVALID_JSON, CODE_EXPECTED_OBJECT, CODE_RECURSION_LIMIT, CODE_MAX_ERRORS_EXCEEDED, CODE_STRING_TOO_LONG
+
+s: Schema = Schema("TargetModel")
+s.field_str("token").min_length(5).max_length(50)
+s.field_int("counter").min(0.0).max(100.0)
+
+# 1. Non-object JSON roots
+res1: ValidationResult = s.validate_json("42")
+nox.test.assert_true(not res1.is_valid, "number root rejected")
+nox.test.assert_eq_str(res1.errors[0].code, CODE_EXPECTED_OBJECT, "expected_object on number")
+
+res2: ValidationResult = s.validate_json("[1, 2, 3]")
+nox.test.assert_true(not res2.is_valid, "array root rejected")
+nox.test.assert_eq_str(res2.errors[0].code, CODE_EXPECTED_OBJECT, "expected_object on array")
+
+res3: ValidationResult = s.validate_json("null")
+nox.test.assert_true(not res3.is_valid, "null root rejected")
+nox.test.assert_eq_str(res3.errors[0].code, CODE_EXPECTED_OBJECT, "expected_object on null")
+
+# 2. Malformed JSON inputs
+malformed_inputs: list[str] = [
+    "",
+    "   ",
+    "{",
+    "}",
+    "{\"token\":",
+    "{\"token\":\"abc\",}",
+    "{token: 123}",
+    "{\"counter\": --1}",
+    "{\"token\": \"unclosed string}"
+]
+
+mi: int = 0
+while mi < len(malformed_inputs):
+    res_m: ValidationResult = s.validate_json(malformed_inputs[mi])
+    nox.test.assert_true(not res_m.is_valid, "malformed JSON fails safely")
+    nox.test.assert_eq_str(res_m.errors[0].code, CODE_INVALID_JSON, "code is invalid_json")
+    mi = mi + 1
+
+# 3. Unicode and multi-byte safety
+unicode_json: str = "{\"token\":\"çğıöşüÇĞİÖŞÜ_güvenli_test\",\"counter\":42}"
+res_uni: ValidationResult = s.validate_json(unicode_json)
+nox.test.assert_true(res_uni.is_valid, "valid multi-byte Unicode accepted")
+nox.test.assert_eq_str(res_uni.data.get_str("token"), "çğıöşüÇĞİÖŞÜ_güvenli_test", "Unicode string preserved")
+
+# 4. Long string boundary attack
+long_str: str = "A"
+li: int = 0
+while li < 12:
+    long_str = long_str + long_str
+    li = li + 1
+# long_str is 4096 characters long
+long_json: str = "{\"token\":\"" + long_str + "\",\"counter\":1}"
+res_long: ValidationResult = s.validate_json(long_json)
+nox.test.assert_true(not res_long.is_valid, "long string exceeding max_length rejected")
+nox.test.assert_eq_str(res_long.errors[0].code, CODE_STRING_TOO_LONG, "code is string_too_long")
+
+# 5. Deep nesting stack exhaustion protection
+nest_schema: Schema = Schema("Deep")
+nest_sub: Schema = Schema("Sub")
+nest_sub2: Schema = Schema("Sub2")
+nest_sub3: Schema = Schema("Sub3")
+
+nest_sub2.field_object("down", nest_sub3)
+nest_sub.field_object("down", nest_sub2)
+nest_schema.field_object("down", nest_sub)
+nest_schema.max_depth = 2
+
+deep_payload: str = "{\"down\":{\"down\":{\"down\":{\"down\":1}}}}"
+res_deep: ValidationResult = nest_schema.validate_json(deep_payload)
+nox.test.assert_true(not res_deep.is_valid, "deep nesting triggers depth limit")
+nox.test.assert_eq_str(res_deep.errors[0].code, CODE_RECURSION_LIMIT, "code is recursion_limit_exceeded")
+
+# 6. Error accumulation cap protection
+err_schema: Schema = Schema("ErrCap")
+err_schema.max_errors = 3
+err_payload: str = "{\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5,\"f6\":6}"
+res_err_cap: ValidationResult = err_schema.validate_json(err_payload)
+nox.test.assert_true(not res_err_cap.is_valid, "error cap prevents unbounded error growth")
+nox.test.assert_true(len(res_err_cap.errors) <= 4, "error list bounded by max_errors cap")
+
+print("fuzz_test passed")
