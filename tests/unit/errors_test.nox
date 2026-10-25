@@ -1,0 +1,41 @@
+import nox.test
+import errors
+from errors import FieldError, ValidationError, CODE_MISSING_FIELD, CODE_OUT_OF_RANGE
+
+fe1: FieldError = FieldError("user.email", CODE_MISSING_FIELD, "Email is required", "email string", "missing")
+nox.test.assert_eq_str(fe1.path, "user.email", "path ok")
+nox.test.assert_eq_str(fe1.code, CODE_MISSING_FIELD, "code ok")
+nox.test.assert_eq_str(fe1.expected, "email string", "expected ok")
+nox.test.assert_eq_str(fe1.actual, "missing", "actual ok")
+
+json_fe: str = fe1.to_json()
+nox.test.assert_true(len(json_fe) > 0, "to_json not empty")
+
+fe2: FieldError = FieldError("user.age", CODE_OUT_OF_RANGE, "Age must be >= 0", "number >= 0", "-1")
+
+err_list: list[FieldError] = []
+err_list.append(fe1)
+err_list.append(fe2)
+
+ve: ValidationError = ValidationError(err_list)
+nox.test.assert_eq_int(ve.count(), 2, "count is 2")
+nox.test.assert_true(ve.first() is not None, "first is present")
+
+f_opt: FieldError | None = ve.first()
+if f_opt is not None:
+    nox.test.assert_eq_str(f_opt.path, "user.email", "first matches fe1")
+
+ve_json: str = ve.to_json()
+nox.test.assert_true(len(ve_json) > 0, "ve_json not empty")
+
+# Test raising and catching ValidationError
+caught: bool = False
+try:
+    raise ve
+except ValidationError as e:
+    caught = True
+    nox.test.assert_eq_int(e.count(), 2, "caught error count")
+
+nox.test.assert_true(caught, "ValidationError successfully caught")
+
+print("errors_test passed")

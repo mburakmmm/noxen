@@ -1,0 +1,250 @@
+# core.nox — Validated data container and result types for Noxen.
+
+import errors
+from errors import FieldError, ValidationError
+import nox.json
+from nox.json import JsonWriter
+
+class ValidatedData:
+    _strs: dict[str, str]
+    _ints: dict[str, int]
+    _floats: dict[str, float]
+    _bools: dict[str, bool]
+    _objs: dict[str, ValidatedData]
+    _list_strs: dict[str, list[str]]
+    _list_ints: dict[str, list[int]]
+    _list_floats: dict[str, list[float]]
+    _list_bools: dict[str, list[bool]]
+    _list_objs: dict[str, list[ValidatedData]]
+    _nulls: list[str]
+    _present: list[str]
+
+    def __init__(self: ValidatedData) -> None:
+        self._strs = {}
+        self._ints = {}
+        self._floats = {}
+        self._bools = {}
+        self._objs = {}
+        self._list_strs = {}
+        self._list_ints = {}
+        self._list_floats = {}
+        self._list_bools = {}
+        self._list_objs = {}
+        self._nulls = []
+        self._present = []
+
+    def set_str(self: ValidatedData, k: str, v: str) -> None:
+        self._strs[k] = v
+        self._present.append(k)
+
+    def set_int(self: ValidatedData, k: str, v: int) -> None:
+        self._ints[k] = v
+        self._present.append(k)
+
+    def set_float(self: ValidatedData, k: str, v: float) -> None:
+        self._floats[k] = v
+        self._present.append(k)
+
+    def set_bool(self: ValidatedData, k: str, v: bool) -> None:
+        self._bools[k] = v
+        self._present.append(k)
+
+    def set_object(self: ValidatedData, k: str, v: ValidatedData) -> None:
+        self._objs[k] = v
+        self._present.append(k)
+
+    def set_list_str(self: ValidatedData, k: str, v: list[str]) -> None:
+        self._list_strs[k] = v
+        self._present.append(k)
+
+    def set_list_int(self: ValidatedData, k: str, v: list[int]) -> None:
+        self._list_ints[k] = v
+        self._present.append(k)
+
+    def set_list_float(self: ValidatedData, k: str, v: list[float]) -> None:
+        self._list_floats[k] = v
+        self._present.append(k)
+
+    def set_list_bool(self: ValidatedData, k: str, v: list[bool]) -> None:
+        self._list_bools[k] = v
+        self._present.append(k)
+
+    def set_list_object(self: ValidatedData, k: str, v: list[ValidatedData]) -> None:
+        self._list_objs[k] = v
+        self._present.append(k)
+
+    def set_null(self: ValidatedData, k: str) -> None:
+        self._nulls.append(k)
+        self._present.append(k)
+
+    def has(self: ValidatedData, k: str) -> bool:
+        i: int = 0
+        while i < len(self._present):
+            if self._present[i] == k:
+                return True
+            i = i + 1
+        return False
+
+    def is_null(self: ValidatedData, k: str) -> bool:
+        i: int = 0
+        while i < len(self._nulls):
+            if self._nulls[i] == k:
+                return True
+            i = i + 1
+        return False
+
+    def get_str(self: ValidatedData, k: str) -> str:
+        return self._strs[k]
+
+    def get_opt_str(self: ValidatedData, k: str) -> str | None:
+        if self.is_null(k) or not self.has(k):
+            return None
+        return self._strs[k]
+
+    def get_int(self: ValidatedData, k: str) -> int:
+        return self._ints[k]
+
+    def get_opt_int(self: ValidatedData, k: str) -> int | None:
+        if self.is_null(k) or not self.has(k):
+            return None
+        return self._ints[k]
+
+    def get_float(self: ValidatedData, k: str) -> float:
+        return self._floats[k]
+
+    def get_opt_float(self: ValidatedData, k: str) -> float | None:
+        if self.is_null(k) or not self.has(k):
+            return None
+        return self._floats[k]
+
+    def get_bool(self: ValidatedData, k: str) -> bool:
+        return self._bools[k]
+
+    def get_opt_bool(self: ValidatedData, k: str) -> bool | None:
+        if self.is_null(k) or not self.has(k):
+            return None
+        return self._bools[k]
+
+    def get_object(self: ValidatedData, k: str) -> ValidatedData:
+        return self._objs[k]
+
+    def get_opt_object(self: ValidatedData, k: str) -> ValidatedData | None:
+        if self.is_null(k) or not self.has(k):
+            return None
+        return self._objs[k]
+
+    def get_list_str(self: ValidatedData, k: str) -> list[str]:
+        if not self.has(k):
+            empty: list[str] = []
+            return empty
+        return self._list_strs[k]
+
+    def get_list_int(self: ValidatedData, k: str) -> list[int]:
+        if not self.has(k):
+            empty: list[int] = []
+            return empty
+        return self._list_ints[k]
+
+    def get_list_float(self: ValidatedData, k: str) -> list[float]:
+        if not self.has(k):
+            empty: list[float] = []
+            return empty
+        return self._list_floats[k]
+
+    def get_list_bool(self: ValidatedData, k: str) -> list[bool]:
+        if not self.has(k):
+            empty: list[bool] = []
+            return empty
+        return self._list_bools[k]
+
+    def get_list_object(self: ValidatedData, k: str) -> list[ValidatedData]:
+        if not self.has(k):
+            empty: list[ValidatedData] = []
+            return empty
+        return self._list_objs[k]
+
+class ValidationResult:
+    is_valid: bool
+    data: ValidatedData
+    errors: list[FieldError]
+
+    def __init__(
+        self: ValidationResult,
+        is_valid: bool,
+        data: ValidatedData,
+        errors: list[FieldError]
+    ) -> None:
+        self.is_valid = is_valid
+        self.data = data
+        self.errors = errors
+
+    def error_count(self: ValidationResult) -> int:
+        return len(self.errors)
+
+    def error_summary(self: ValidationResult) -> str:
+        if len(self.errors) == 0:
+            return "No errors"
+        summary: str = self.errors[0].message
+        if len(self.errors) > 1:
+            summary = summary + " (and " + str(len(self.errors) - 1) + " more)"
+        return summary
+
+    def to_json(self: ValidationResult) -> str:
+        w: JsonWriter = JsonWriter()
+        w.begin_object()
+        w.write_key("valid")
+        w.write_bool(self.is_valid)
+        w.write_key("error_count")
+        w.write_int(len(self.errors))
+        w.write_key("errors")
+        w.begin_array()
+        i: int = 0
+        while i < len(self.errors):
+            e: FieldError = self.errors[i]
+            w.begin_object()
+            w.write_key("path")
+            w.write_string(e.path)
+            w.write_key("code")
+            w.write_string(e.code)
+            w.write_key("message")
+            w.write_string(e.message)
+            w.write_key("expected")
+            w.write_string(e.expected)
+            w.write_key("actual")
+            w.write_string(e.actual)
+            w.end_object()
+            i = i + 1
+        w.end_array()
+        w.end_object()
+        return w.build()
+
+class Result[T]:
+    is_ok: bool
+    val: T | None
+    errors: list[FieldError]
+
+    def __init__(
+        self,
+        is_ok: bool,
+        val: T | None,
+        errors: list[FieldError]
+    ) -> None:
+        self.is_ok = is_ok
+        self.val = val
+        self.errors = errors
+
+    def unwrap(self) -> T:
+        if not self.is_ok:
+            raise ValidationError(self.errors)
+        v: T | None = self.val
+        if v is None:
+            raise ValidationError(self.errors)
+        return v
+
+    def unwrap_or(self, fallback: T) -> T:
+        if not self.is_ok:
+            return fallback
+        v: T | None = self.val
+        if v is None:
+            return fallback
+        return v

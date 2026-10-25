@@ -1,0 +1,110 @@
+# errors.nox — Structured error types for Noxen.
+# All validation issues produce a FieldError with stable machine codes and exact paths.
+
+import nox.json
+from nox.json import JsonWriter
+
+# Error codes
+CODE_INVALID_JSON: str = "invalid_json"
+CODE_EXPECTED_OBJECT: str = "expected_object"
+CODE_MISSING_FIELD: str = "missing_field"
+CODE_UNEXPECTED_NULL: str = "unexpected_null"
+CODE_TYPE_MISMATCH: str = "type_mismatch"
+CODE_EXTRA_FIELD: str = "extra_field"
+CODE_OUT_OF_RANGE: str = "out_of_range"
+CODE_STRING_TOO_SHORT: str = "string_too_short"
+CODE_STRING_TOO_LONG: str = "string_too_long"
+CODE_INVALID_EMAIL: str = "invalid_email"
+CODE_INVALID_URL: str = "invalid_url"
+CODE_INVALID_UUID: str = "invalid_uuid"
+CODE_PATTERN_MISMATCH: str = "pattern_mismatch"
+CODE_CUSTOM: str = "custom_validation_error"
+
+class FieldError:
+    path: str
+    code: str
+    message: str
+    expected: str
+    actual: str
+
+    def __init__(
+        self: FieldError,
+        path: str,
+        code: str,
+        message: str,
+        expected: str,
+        actual: str
+    ) -> None:
+        self.path = path
+        self.code = code
+        self.message = message
+        self.expected = expected
+        self.actual = actual
+
+    def to_json(self: FieldError) -> str:
+        w: JsonWriter = JsonWriter()
+        w.begin_object()
+        w.write_key("path")
+        w.write_string(self.path)
+        w.write_key("code")
+        w.write_string(self.code)
+        w.write_key("message")
+        w.write_string(self.message)
+        w.write_key("expected")
+        w.write_string(self.expected)
+        w.write_key("actual")
+        w.write_string(self.actual)
+        w.end_object()
+        return w.build()
+
+    def __str__(self: FieldError) -> str:
+        return "[" + self.code + "] " + self.path + ": " + self.message
+
+class ValidationError(Exception):
+    errors: list[FieldError]
+    msg: str
+
+    def __init__(self: ValidationError, errors: list[FieldError]) -> None:
+        self.errors = errors
+        summary: str = "Validation failed with " + str(len(errors)) + " error(s)"
+        if len(errors) > 0:
+            summary = summary + ": " + errors[0].message
+        self.msg = summary
+        super().__init__(self.msg)
+
+    def count(self: ValidationError) -> int:
+        return len(self.errors)
+
+    def first(self: ValidationError) -> FieldError | None:
+        if len(self.errors) == 0:
+            return None
+        return self.errors[0]
+
+    def to_json(self: ValidationError) -> str:
+        w: JsonWriter = JsonWriter()
+        w.begin_object()
+        w.write_key("error")
+        w.write_string("ValidationError")
+        w.write_key("count")
+        w.write_int(len(self.errors))
+        w.write_key("errors")
+        w.begin_array()
+        i: int = 0
+        while i < len(self.errors):
+            e: FieldError = self.errors[i]
+            w.begin_object()
+            w.write_key("path")
+            w.write_string(e.path)
+            w.write_key("code")
+            w.write_string(e.code)
+            w.write_key("message")
+            w.write_string(e.message)
+            w.write_key("expected")
+            w.write_string(e.expected)
+            w.write_key("actual")
+            w.write_string(e.actual)
+            w.end_object()
+            i = i + 1
+        w.end_array()
+        w.end_object()
+        return w.build()

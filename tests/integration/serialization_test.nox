@@ -1,0 +1,28 @@
+import nox.test
+import serialization
+import nox.json
+from serialization import Serializer
+
+s: Serializer = Serializer()
+s.str("title", "Test Payload")
+s.int("count", 42)
+s.float("score", 98.5)
+s.bool("active", True)
+s.null("notes")
+s.opt_str("subtitle", None)
+s.opt_int("max_retries", 3)
+
+items: list[str] = ["a", "b", "c"]
+s.list_str("tags", items)
+
+nums: list[int] = [1, 2, 3]
+s.list_int("numbers", nums)
+
+json_out: str = s.build()
+nox.test.assert_true(len(json_out) > 0, "serialization output not empty")
+
+# Parse back to verify validity
+v: JsonValue = nox.json.parse(json_out)
+nox.test.assert_true(nox.json.is_object(v), "output is a valid JSON object")
+
+print("serialization_test passed")

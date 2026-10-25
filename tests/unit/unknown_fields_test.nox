@@ -1,0 +1,33 @@
+import nox.test
+import schema
+import core
+from schema import Schema, POLICY_FORBID, POLICY_IGNORE
+from core import ValidationResult
+from errors import CODE_EXTRA_FIELD
+
+# 1. Default policy is POLICY_FORBID
+s_strict: Schema = Schema("StrictUser")
+s_strict.field_str("username")
+s_strict.field_int("age")
+
+strict_json: str = "{\"username\":\"ada\",\"age\":36,\"extra_hacker_field\":\"malicious\",\"another\":123}"
+res_strict: ValidationResult = s_strict.validate_json(strict_json)
+
+nox.test.assert_true(not res_strict.is_valid, "strict policy forbids unknown fields")
+nox.test.assert_eq_int(len(res_strict.errors), 2, "2 unknown fields reported")
+nox.test.assert_eq_str(res_strict.errors[0].code, CODE_EXTRA_FIELD, "code is extra_field")
+nox.test.assert_eq_str(res_strict.errors[0].path, "extra_hacker_field", "path matches extra field")
+nox.test.assert_eq_str(res_strict.errors[1].path, "another", "second extra field reported")
+
+# 2. Relaxed policy: POLICY_IGNORE
+s_ignore: Schema = Schema("RelaxedUser")
+s_ignore.field_str("username")
+s_ignore.field_int("age")
+s_ignore.set_policy(POLICY_IGNORE)
+
+res_ignore: ValidationResult = s_ignore.validate_json(strict_json)
+nox.test.assert_true(res_ignore.is_valid, "ignore policy permits unknown fields")
+nox.test.assert_eq_str(res_ignore.data.get_str("username"), "ada", "known field preserved")
+nox.test.assert_eq_int(res_ignore.data.get_int("age"), 36, "known int preserved")
+
+print("unknown_fields_test passed")

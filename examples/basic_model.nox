@@ -1,0 +1,47 @@
+# examples/basic_model.nox — Basic typed model with validation.
+
+import schema
+import models
+import core
+from schema import Schema
+from models import ModelSchema
+from core import ValidatedData, Result
+
+class Product:
+    title: str
+    price: float
+    in_stock: bool
+    sku: str | None
+
+    def __init__(self: Product, title: str, price: float, in_stock: bool, sku: str | None) -> None:
+        self.title = title
+        self.price = price
+        self.in_stock = in_stock
+        self.sku = sku
+
+# Define Schema
+product_schema: Schema = Schema("Product")
+product_schema.field_str("title").min_length(2).max_length(50)
+product_schema.field_float("price").min(0.01)
+product_schema.field_bool("in_stock").default_b(True)
+product_schema.field_str("sku").optional()
+
+def make_product(d: ValidatedData) -> Product:
+    return Product(
+        d.get_str("title"),
+        d.get_float("price"),
+        d.get_bool("in_stock"),
+        d.get_opt_str("sku")
+    )
+
+model: ModelSchema[Product] = ModelSchema[Product](product_schema, make_product)
+
+# Parse valid JSON
+raw_json: str = "{\"title\":\"Wireless Mechanical Keyboard\",\"price\":129.99,\"sku\":\"KBD-001\"}"
+res: Result[Product] = model.parse_json(raw_json)
+
+if res.is_ok:
+    p: Product = res.unwrap()
+    print("Parsed product:", p.title, "- Price: $" + str(p.price), "- In stock:", p.in_stock)
+else:
+    print("Validation errors:", res.errors[0].message)

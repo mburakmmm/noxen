@@ -1,0 +1,37 @@
+import nox.test
+import schema
+import nox.json
+from schema import Schema
+
+s: Schema = Schema("Product")
+s.field_str("title").min_length(2).max_length(100).describe("Product title")
+s.field_float("price").min(0.01).describe("Price in USD")
+s.field_bool("in_stock")
+s.field_str("tag").optional()
+s.field_list("categories", "string")
+
+schema_text: str = s.to_json_schema()
+nox.test.assert_true(len(schema_text) > 0, "schema text produced")
+
+# Parse generated schema to verify it is valid JSON
+parsed_schema: JsonValue = nox.json.parse(schema_text)
+nox.test.assert_true(nox.json.is_object(parsed_schema), "schema root is an object")
+
+# Check required array
+i: int = 0
+found_title: bool = False
+found_props: bool = False
+n: int = nox.json.object_len(parsed_schema)
+while i < n:
+    k: str = nox.json.object_key(parsed_schema, i)
+    if k == "title":
+        nox.test.assert_eq_str(nox.json.as_string(nox.json.object_value(parsed_schema, i)), "Product", "schema title")
+        found_title = True
+    elif k == "properties":
+        found_props = True
+    i = i + 1
+
+nox.test.assert_true(found_title, "found title in schema")
+nox.test.assert_true(found_props, "found properties in schema")
+
+print("json_schema_test passed")

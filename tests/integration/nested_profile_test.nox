@@ -1,0 +1,121 @@
+# tests/integration/nested_profile_test.nox
+# Phase 0 Milestone: Nested Profile model, invalid-input errors with nested paths, and JSON round-trip.
+
+import nox.test
+import schema
+import models
+import core
+import serialization
+from schema import Schema
+from models import ModelSchema
+from core import ValidatedData, Result
+from serialization import Serializer
+from errors import CODE_INVALID_URL, CODE_MISSING_FIELD
+
+class Profile:
+    bio: str
+    website: str | None
+
+    def __init__(self: Profile, bio: str, website: str | None) -> None:
+        self.bio = bio
+        self.website = website
+
+    def to_json(self: Profile) -> str:
+        s: Serializer = Serializer()
+        s.str("bio", self.bio)
+        s.opt_str("website", self.website)
+        return s.build()
+
+class User:
+    name: str
+    age: int
+    profile: Profile | None
+
+    def __init__(self: User, name: str, age: int, profile: Profile | None) -> None:
+        self.name = name
+        self.age = age
+        self.profile = profile
+
+    def to_json(self: User) -> str:
+        s: Serializer = Serializer()
+        s.str("name", self.name)
+        s.int("age", self.age)
+        p: Profile | None = self.profile
+        if p is None:
+            s.null("profile")
+        else:
+            s.raw_json("profile", p.to_json())
+        return s.build()
+
+profile_schema: Schema = Schema("Profile")
+profile_schema.field_str("bio").min_length(3)
+profile_schema.field_str("website").url().optional()
+
+def make_profile(d: ValidatedData) -> Profile:
+    return Profile(d.get_str("bio"), d.get_opt_str("website"))
+
+user_schema: Schema = Schema("User")
+user_schema.field_str("name").min_length(2)
+user_schema.field_int("age").min(0.0)
+user_schema.field_object("profile", profile_schema).optional()
+
+def make_user(d: ValidatedData) -> User:
+    p_opt: Profile | None = None
+    sub: ValidatedData | None = d.get_opt_object("profile")
+    if sub is not None:
+        p_opt = make_profile(sub)
+    return User(d.get_str("name"), d.get_int("age"), p_opt)
+
+user_model: ModelSchema[User] = ModelSchema[User](user_schema, make_user)
+
+# 1. Successful nested parsing
+valid_payload: str = "{\"name\":\"Katherine Johnson\",\"age\":101,\"profile\":{\"bio\":\"NASA Mathematician\",\"website\":\"https://nasa.gov\"}}"
+res: Result[User] = user_model.parse_json(valid_payload)
+nox.test.assert_true(res.is_ok, "nested user parsed successfully")
+
+u: User = res.unwrap()
+nox.test.assert_eq_str(u.name, "Katherine Johnson", "user name")
+nox.test.assert_eq_int(u.age, 101, "user age")
+nox.test.assert_true(u.profile is not None, "profile is not None")
+
+p: Profile | None = u.profile
+if p is not None:
+    nox.test.assert_eq_str(p.bio, "NASA Mathematician", "nested bio")
+    nox.test.assert_true(p.website is not None, "nested website not None")
+    w: str | None = p.website
+    if w is not None:
+        nox.test.assert_eq_str(w, "https://nasa.gov", "nested website value")
+
+# 2. JSON Round-Trip Test (User -> JSON -> User)
+serialized_json: str = u.to_json()
+roundtrip_res: Result[User] = user_model.parse_json(serialized_json)
+nox.test.assert_true(roundtrip_res.is_ok, "round-trip JSON parses successfully")
+
+u_rt: User = roundtrip_res.unwrap()
+nox.test.assert_eq_str(u_rt.name, u.name, "round-trip name matches")
+nox.test.assert_eq_int(u_rt.age, u.age, "round-trip age matches")
+p_rt: Profile | None = u_rt.profile
+if p_rt is not None and p is not None:
+    nox.test.assert_eq_str(p_rt.bio, p.bio, "round-trip bio matches")
+    w_rt: str | None = p_rt.website
+    w_orig: str | None = p.website
+    if w_rt is not None and w_orig is not None:
+        nox.test.assert_eq_str(w_rt, w_orig, "round-trip website matches")
+
+# 3. Invalid nested input: bad URL in profile.website
+invalid_nested_url: str = "{\"name\":\"Katherine\",\"age\":50,\"profile\":{\"bio\":\"Scientist\",\"website\":\"not-a-valid-url\"}}"
+bad_res: Result[User] = user_model.parse_json(invalid_nested_url)
+nox.test.assert_true(not bad_res.is_ok, "invalid nested URL detected")
+nox.test.assert_eq_int(len(bad_res.errors), 1, "1 error in nested payload")
+nox.test.assert_eq_str(bad_res.errors[0].code, CODE_INVALID_URL, "error code is invalid_url")
+nox.test.assert_eq_str(bad_res.errors[0].path, "profile.website", "error path is profile.website")
+
+# 4. Invalid nested input: missing required field in nested schema (profile.bio)
+invalid_nested_missing: str = "{\"name\":\"Katherine\",\"age\":50,\"profile\":{\"website\":\"https://nasa.gov\"}}"
+bad_res2: Result[User] = user_model.parse_json(invalid_nested_missing)
+nox.test.assert_true(not bad_res2.is_ok, "missing nested bio detected")
+nox.test.assert_eq_int(len(bad_res2.errors), 1, "1 error in nested payload")
+nox.test.assert_eq_str(bad_res2.errors[0].code, CODE_MISSING_FIELD, "error code is missing_field")
+nox.test.assert_eq_str(bad_res2.errors[0].path, "profile.bio", "error path is profile.bio")
+
+print("nested_profile_test passed")

@@ -1,0 +1,41 @@
+# examples/custom_validator.nox — Cross-field validation using custom validator hooks.
+
+import schema
+import core
+import errors
+from schema import Schema
+from core import ValidatedData, ValidationResult
+from errors import FieldError, CODE_CUSTOM
+
+# Event booking where end_time must be after start_time
+event_schema: Schema = Schema("EventBooking")
+event_schema.field_str("title").min_length(3)
+event_schema.field_int("start_hour").min(0.0).max(23.0)
+event_schema.field_int("end_hour").min(0.0).max(23.0)
+
+def validate_event_duration(d: ValidatedData) -> list[FieldError]:
+    errs: list[FieldError] = []
+    start: int = d.get_int("start_hour")
+    end: int = d.get_int("end_hour")
+    if end <= start:
+        errs.append(
+            FieldError("end_hour", CODE_CUSTOM, "end_hour must be strictly after start_hour", "> " + str(start), str(end))
+        )
+    return errs
+
+event_schema.add_validator(validate_event_duration)
+
+# Invalid payload: ends before it starts
+invalid_event: str = "{\"title\":\"Nox Architecture Review\",\"start_hour\":14,\"end_hour\":11}"
+res_bad: ValidationResult = event_schema.validate_json(invalid_event)
+
+if not res_bad.is_valid:
+    print("Cross-field validation failed as expected:")
+    print("Error:", res_bad.errors[0].message)
+
+# Valid payload
+valid_event: str = "{\"title\":\"Nox Architecture Review\",\"start_hour\":14,\"end_hour\":16}"
+res_good: ValidationResult = event_schema.validate_json(valid_event)
+
+if res_good.is_valid:
+    print("Valid booking scheduled from", res_good.data.get_int("start_hour"), "to", res_good.data.get_int("end_hour"))

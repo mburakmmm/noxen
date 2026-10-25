@@ -1,0 +1,59 @@
+# validators.nox — Core validators and constraint checkers for Noxen.
+
+import nox.url
+import nox.regex
+import nox.strings
+from nox.url import URL, UrlError
+
+def is_valid_email(s: str) -> bool:
+    if nox.strings.contains(s, " "):
+        return False
+    parts: list[str] = nox.strings.split(s, "@")
+    if len(parts) != 2:
+        return False
+    local: str = parts[0]
+    domain: str = parts[1]
+    if len(local) == 0 or len(domain) < 3:
+        return False
+    dot: int = nox.strings.index_of(domain, ".")
+    if dot <= 0:
+        return False
+    if nox.strings.ends_with(domain, "."):
+        return False
+    return True
+
+def is_valid_url(s: str) -> bool:
+    try:
+        u: URL = nox.url.parse(s)
+        if len(u.scheme) == 0 or len(u.host) == 0:
+            return False
+        if u.scheme != "http" and u.scheme != "https":
+            return False
+        return True
+    except UrlError as e:
+        return False
+
+def _is_hex(b: int) -> bool:
+    return (b >= 48 and b <= 57) or (b >= 97 and b <= 102) or (b >= 65 and b <= 70)
+
+def is_valid_uuid(s: str) -> bool:
+    if nox.strings.byte_len(s) != 36:
+        return False
+    i: int = 0
+    while i < 36:
+        b: int = nox.strings.byte_at(s, i)
+        if i == 8 or i == 13 or i == 18 or i == 23:
+            if b != 45:
+                return False
+        else:
+            if not _is_hex(b):
+                return False
+        i = i + 1
+    return True
+
+# Checks if a floating point value safely represents an integer without precision loss.
+def is_valid_int(n: float) -> bool:
+    if n > 9007199254740991.0 or n < -9007199254740991.0:
+        return False
+    i: int = int(n)
+    return float(i) == n

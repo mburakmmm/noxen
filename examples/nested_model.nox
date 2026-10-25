@@ -1,0 +1,49 @@
+# examples/nested_model.nox — Nested data models with structured paths.
+
+import schema
+import models
+import core
+from schema import Schema
+from models import ModelSchema
+from core import ValidatedData, Result
+
+class Address:
+    city: str
+    country: str
+
+    def __init__(self: Address, city: str, country: str) -> None:
+        self.city = city
+        self.country = country
+
+class Company:
+    name: str
+    address: Address
+
+    def __init__(self: Company, name: str, address: Address) -> None:
+        self.name = name
+        self.address = address
+
+address_schema: Schema = Schema("Address")
+address_schema.field_str("city").min_length(2)
+address_schema.field_str("country").min_length(2)
+
+def make_address(d: ValidatedData) -> Address:
+    return Address(d.get_str("city"), d.get_str("country"))
+
+company_schema: Schema = Schema("Company")
+company_schema.field_str("name").min_length(1)
+company_schema.field_object("address", address_schema)
+
+def make_company(d: ValidatedData) -> Company:
+    addr_data: ValidatedData = d.get_object("address")
+    return Company(d.get_str("name"), make_address(addr_data))
+
+model: ModelSchema[Company] = ModelSchema[Company](company_schema, make_company)
+
+# Valid payload
+valid_json: str = "{\"name\":\"Acme Corp\",\"address\":{\"city\":\"San Francisco\",\"country\":\"USA\"}}"
+res: Result[Company] = model.parse_json(valid_json)
+
+if res.is_ok:
+    c: Company = res.unwrap()
+    print("Company:", c.name, "located in", c.address.city + ",", c.address.country)

@@ -1,0 +1,34 @@
+import nox.test
+import schema
+import core
+import errors
+from schema import Schema
+from core import ValidatedData, ValidationResult
+from errors import FieldError, CODE_CUSTOM
+
+s: Schema = Schema("RegisterForm")
+s.field_str("password").min_length(8)
+s.field_str("confirm_password")
+
+def passwords_must_match(d: ValidatedData) -> list[FieldError]:
+    errs: list[FieldError] = []
+    p1: str = d.get_str("password")
+    p2: str = d.get_str("confirm_password")
+    if p1 != p2:
+        errs.append(FieldError("confirm_password", CODE_CUSTOM, "Passwords do not match", p1, p2))
+    return errs
+
+s.add_validator(passwords_must_match)
+
+# Valid matching passwords
+valid_res: ValidationResult = s.validate_json("{\"password\":\"Secret123!\",\"confirm_password\":\"Secret123!\"}")
+nox.test.assert_true(valid_res.is_valid, "matching passwords pass validation")
+
+# Invalid mismatching passwords
+mismatch_res: ValidationResult = s.validate_json("{\"password\":\"Secret123!\",\"confirm_password\":\"Different!\"}")
+nox.test.assert_true(not mismatch_res.is_valid, "mismatching passwords fail validation")
+nox.test.assert_eq_int(len(mismatch_res.errors), 1, "1 custom error emitted")
+nox.test.assert_eq_str(mismatch_res.errors[0].code, CODE_CUSTOM, "custom code matches")
+nox.test.assert_eq_str(mismatch_res.errors[0].path, "confirm_password", "path is confirm_password")
+
+print("custom_validator_test passed")

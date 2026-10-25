@@ -1,0 +1,79 @@
+# tests/integration/user_model_test.nox
+# Phase 0 Milestone: Implement and test User model with name: str, age: int, and one optional/nullable field.
+
+import nox.test
+import schema
+import models
+import core
+from schema import Schema
+from models import ModelSchema
+from core import ValidatedData, Result
+from errors import CODE_MISSING_FIELD, CODE_TYPE_MISMATCH, CODE_UNEXPECTED_NULL
+
+class User:
+    name: str
+    age: int
+    bio: str | None
+
+    def __init__(self: User, name: str, age: int, bio: str | None) -> None:
+        self.name = name
+        self.age = age
+        self.bio = bio
+
+user_schema: Schema = Schema("User")
+user_schema.field_str("name").min_length(2)
+user_schema.field_int("age").min(0.0)
+user_schema.field_str("bio").nullable().optional()
+
+def make_user(d: ValidatedData) -> User:
+    return User(d.get_str("name"), d.get_int("age"), d.get_opt_str("bio"))
+
+model: ModelSchema[User] = ModelSchema[User](user_schema, make_user)
+
+# 1. Valid input with bio present
+valid_json1: str = "{\"name\":\"Grace Hopper\",\"age\":85,\"bio\":\"Pioneer of computer programming\"}"
+res1: Result[User] = model.parse_json(valid_json1)
+nox.test.assert_true(res1.is_ok, "valid_json1 is ok")
+u1: User = res1.unwrap()
+nox.test.assert_eq_str(u1.name, "Grace Hopper", "u1 name")
+nox.test.assert_eq_int(u1.age, 85, "u1 age")
+nox.test.assert_true(u1.bio is not None, "u1 bio is not None")
+
+# 2. Valid input with bio omitted (optional)
+valid_json2: str = "{\"name\":\"Alan Turing\",\"age\":41}"
+res2: Result[User] = model.parse_json(valid_json2)
+nox.test.assert_true(res2.is_ok, "valid_json2 is ok")
+u2: User = res2.unwrap()
+nox.test.assert_eq_str(u2.name, "Alan Turing", "u2 name")
+nox.test.assert_eq_int(u2.age, 41, "u2 age")
+nox.test.assert_true(u2.bio is None, "u2 bio is None on omitted")
+
+# 3. Valid input with bio explicitly null (nullable)
+valid_json3: str = "{\"name\":\"Claude Shannon\",\"age\":84,\"bio\":null}"
+res3: Result[User] = model.parse_json(valid_json3)
+nox.test.assert_true(res3.is_ok, "valid_json3 is ok")
+u3: User = res3.unwrap()
+nox.test.assert_eq_str(u3.name, "Claude Shannon", "u3 name")
+nox.test.assert_true(u3.bio is None, "u3 bio is None on explicit null")
+
+# 4. Invalid: missing required field 'name'
+bad_json1: str = "{\"age\":25}"
+res_bad1: Result[User] = model.parse_json(bad_json1)
+nox.test.assert_true(not res_bad1.is_ok, "missing name detected")
+nox.test.assert_eq_int(len(res_bad1.errors), 1, "1 error")
+nox.test.assert_eq_str(res_bad1.errors[0].code, CODE_MISSING_FIELD, "code missing_field")
+nox.test.assert_eq_str(res_bad1.errors[0].path, "name", "path is name")
+
+# 5. Invalid: type mismatch on age (string instead of int)
+bad_json2: str = "{\"name\":\"Bob\",\"age\":\"twenty\"}"
+res_bad2: Result[User] = model.parse_json(bad_json2)
+nox.test.assert_true(not res_bad2.is_ok, "string age rejected")
+nox.test.assert_eq_str(res_bad2.errors[0].code, CODE_TYPE_MISMATCH, "code type_mismatch")
+
+# 6. Invalid: non-nullable required field passed null
+bad_json3: str = "{\"name\":null,\"age\":30}"
+res_bad3: Result[User] = model.parse_json(bad_json3)
+nox.test.assert_true(not res_bad3.is_ok, "null name rejected")
+nox.test.assert_eq_str(res_bad3.errors[0].code, CODE_UNEXPECTED_NULL, "code unexpected_null")
+
+print("user_model_test passed")

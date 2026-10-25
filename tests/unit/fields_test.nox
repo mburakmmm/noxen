@@ -1,0 +1,39 @@
+import nox.test
+import schema
+from schema import Schema, Field, MODE_REQUIRED, MODE_REQUIRED_NULLABLE, MODE_OPTIONAL, MODE_OPTIONAL_NULLABLE
+import core
+from core import ValidatedData, ValidationResult
+
+s: Schema = Schema("TestFields")
+f_req: Field = s.field_str("req")
+nox.test.assert_eq_int(f_req.mode, MODE_REQUIRED, "default mode is required")
+
+f_opt: Field = s.field_str("opt").optional()
+nox.test.assert_eq_int(f_opt.mode, MODE_OPTIONAL, "optional mode")
+
+f_null: Field = s.field_str("null_req").nullable()
+nox.test.assert_eq_int(f_null.mode, MODE_REQUIRED_NULLABLE, "nullable required mode")
+
+f_opt_null: Field = s.field_str("opt_null").optional().nullable()
+nox.test.assert_eq_int(f_opt_null.mode, MODE_OPTIONAL_NULLABLE, "optional nullable mode")
+
+# Defaults apply on missing
+s_def: Schema = Schema("DefaultTest")
+s_def.field_str("name").default_s("guest")
+s_def.field_int("role_id").default_i(1)
+s_def.field_bool("is_admin").default_b(False)
+
+res_def: ValidationResult = s_def.validate_json("{}")
+nox.test.assert_true(res_def.is_valid, "defaults applied on empty json")
+nox.test.assert_eq_str(res_def.data.get_str("name"), "guest", "default str")
+nox.test.assert_eq_int(res_def.data.get_int("role_id"), 1, "default int")
+nox.test.assert_true(not res_def.data.get_bool("is_admin"), "default bool")
+
+# Explicit value overrides default
+res_override: ValidationResult = s_def.validate_json("{\"name\":\"admin\",\"role_id\":99,\"is_admin\":true}")
+nox.test.assert_true(res_override.is_valid, "override valid")
+nox.test.assert_eq_str(res_override.data.get_str("name"), "admin", "overridden str")
+nox.test.assert_eq_int(res_override.data.get_int("role_id"), 99, "overridden int")
+nox.test.assert_true(res_override.data.get_bool("is_admin"), "overridden bool")
+
+print("fields_test passed")

@@ -1,0 +1,23 @@
+# examples/strict_validation.nox — Strict validation preventing unexpected fields and type coercion.
+
+import schema
+import core
+from schema import Schema, POLICY_FORBID
+from core import ValidationResult
+
+user_schema: Schema = Schema("StrictUser")
+user_schema.field_str("username").min_length(3)
+user_schema.field_int("age").min(0.0)
+user_schema.set_policy(POLICY_FORBID) # Strict by default
+
+# Payload contains an unexpected field 'isAdmin' and string '30' for integer age
+payload: str = "{\"username\":\"ada\",\"age\":\"30\",\"isAdmin\":true}"
+res: ValidationResult = user_schema.validate_json(payload)
+
+if not res.is_valid:
+    print("Strict validation successfully prevented invalid data!")
+    print("Total errors found:", res.error_count())
+    i: int = 0
+    while i < len(res.errors):
+        print("- [" + res.errors[i].code + "] at " + res.errors[i].path + ": " + res.errors[i].message)
+        i = i + 1

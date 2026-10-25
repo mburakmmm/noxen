@@ -1,0 +1,55 @@
+# examples/json_roundtrip.nox — Validating JSON to object and serializing back.
+
+import schema
+import models
+import core
+import serialization
+from schema import Schema
+from models import ModelSchema
+from core import ValidatedData, Result
+from serialization import Serializer
+
+class Account:
+    email: str
+    balance: int
+    is_verified: bool
+
+    def __init__(self: Account, email: str, balance: int, is_verified: bool) -> None:
+        self.email = email
+        self.balance = balance
+        self.is_verified = is_verified
+
+    def to_json(self: Account) -> str:
+        s: Serializer = Serializer()
+        s.str("email", self.email)
+        s.int("balance", self.balance)
+        s.bool("is_verified", self.is_verified)
+        return s.build()
+
+account_schema: Schema = Schema("Account")
+account_schema.field_str("email").email()
+account_schema.field_int("balance").min(0.0)
+account_schema.field_bool("is_verified").default_b(False)
+
+def make_account(d: ValidatedData) -> Account:
+    return Account(d.get_str("email"), d.get_int("balance"), d.get_bool("is_verified"))
+
+model: ModelSchema[Account] = ModelSchema[Account](account_schema, make_account)
+
+# 1. Incoming JSON
+input_json: str = "{\"email\":\"developer@noxlang.com\",\"balance\":500,\"is_verified\":true}"
+res: Result[Account] = model.parse_json(input_json)
+
+if res.is_ok:
+    acct: Account = res.unwrap()
+    print("Step 1: Parsed into typed object Account(email=" + acct.email + ", balance=" + str(acct.balance) + ")")
+    
+    # 2. Serialize back to JSON
+    output_json: str = acct.to_json()
+    print("Step 2: Serialized back to JSON ->", output_json)
+    
+    # 3. Round-trip parse
+    res_rt: Result[Account] = model.parse_json(output_json)
+    if res_rt.is_ok:
+        acct_rt: Account = res_rt.unwrap()
+        print("Step 3: Round-trip successful! Verified balance:", acct_rt.balance)

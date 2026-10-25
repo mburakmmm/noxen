@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y build-essential curl
+
+      - name: Install Nox
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/mburakmmm/nox-lang/main/install.sh | bash
+          echo "$HOME/.nox-lang/bin" >> "$GITHUB_PATH"
+
+      - name: Check toolchain
+        run: |
+          noxc --version
+
+      - name: Typecheck core modules
+        run: |
+          noxc check errors.nox
+          noxc check core.nox
+          noxc check schema.nox
+          noxc check fields.nox
+          noxc check models.nox
+          noxc check serialization.nox
+          noxc check validators.nox
+          noxc check noxen.nox
+          noxc check main.nox
+
+      - name: Run test suite
+        run: |
+          noxc test
+
+      - name: Run examples
+        run: |
+          noxc run examples/basic_model.nox
+          noxc run examples/nested_model.nox
+          noxc run examples/strict_validation.nox
+          noxc run examples/json_roundtrip.nox
+          noxc run examples/custom_validator.nox

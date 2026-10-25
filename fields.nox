@@ -1,0 +1,4 @@
+# fields.nox — Field definition and presence modes for Noxen.
+
+import schema
+from schema import Field, MODE_REQUIRED, MODE_REQUIRED_NULLABLE, MODE_OPTIONAL, MODE_OPTIONAL_NULLABLE

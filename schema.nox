@@ -1,0 +1,626 @@
+# schema.nox — Declarative schema definition, validation engine, and JSON Schema generation.
+
+import errors
+from errors import FieldError, CODE_INVALID_JSON, CODE_EXPECTED_OBJECT, CODE_MISSING_FIELD, CODE_UNEXPECTED_NULL, CODE_TYPE_MISMATCH, CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE, CODE_STRING_TOO_SHORT, CODE_STRING_TOO_LONG, CODE_INVALID_EMAIL, CODE_INVALID_URL, CODE_INVALID_UUID, CODE_PATTERN_MISMATCH
+import validators
+import core
+from core import ValidatedData, ValidationResult
+import nox.json
+import nox.regex
+import nox.strings
+from nox.json import JsonError, JsonWriter
+
+# Presence modes
+MODE_REQUIRED: int = 0
+MODE_REQUIRED_NULLABLE: int = 1
+MODE_OPTIONAL: int = 2
+MODE_OPTIONAL_NULLABLE: int = 3
+
+# Unknown field policies
+POLICY_FORBID: int = 0
+POLICY_IGNORE: int = 1
+
+def _describe_json_kind(v: JsonValue) -> str:
+    if nox.json.is_null(v):
+        return "null"
+    if nox.json.is_bool(v):
+        return "bool"
+    if nox.json.is_number(v):
+        return "number"
+    if nox.json.is_string(v):
+        return "string"
+    if nox.json.is_array(v):
+        return "array"
+    if nox.json.is_object(v):
+        return "object"
+    return "unknown"
+
+def _object_lookup(v: JsonValue, key: str) -> JsonValue | None:
+    i: int = 0
+    n: int = nox.json.object_len(v)
+    while i < n:
+        if nox.json.object_key(v, i) == key:
+            return nox.json.object_value(v, i)
+        i = i + 1
+    return None
+
+class Field:
+    name: str
+    kind: str
+    mode: int
+    has_default: bool
+    default_str: str
+    default_int: int
+    default_float: float
+    default_bool: bool
+    has_min: bool
+    min_val: float
+    has_max: bool
+    max_val: float
+    has_min_len: bool
+    min_len: int
+    has_max_len: bool
+    max_len: int
+    pattern: str
+    fmt: str
+    item_kind: str
+    nested_schema: Schema | None
+    item_schema: Schema | None
+    description: str
+
+    def __init__(self: Field, name: str, kind: str) -> None:
+        self.name = name
+        self.kind = kind
+        self.mode = MODE_REQUIRED
+        self.has_default = False
+        self.default_str = ""
+        self.default_int = 0
+        self.default_float = 0.0
+        self.default_bool = False
+        self.has_min = False
+        self.min_val = 0.0
+        self.has_max = False
+        self.max_val = 0.0
+        self.has_min_len = False
+        self.min_len = 0
+        self.has_max_len = False
+        self.max_len = 0
+        self.pattern = ""
+        self.fmt = ""
+        self.item_kind = ""
+        self.nested_schema = None
+        self.item_schema = None
+        self.description = ""
+
+    def optional(self: Field) -> Field:
+        if self.mode == MODE_REQUIRED:
+            self.mode = MODE_OPTIONAL
+        elif self.mode == MODE_REQUIRED_NULLABLE:
+            self.mode = MODE_OPTIONAL_NULLABLE
+        return self
+
+    def nullable(self: Field) -> Field:
+        if self.mode == MODE_REQUIRED:
+            self.mode = MODE_REQUIRED_NULLABLE
+        elif self.mode == MODE_OPTIONAL:
+            self.mode = MODE_OPTIONAL_NULLABLE
+        return self
+
+    def default_s(self: Field, v: str) -> Field:
+        self.has_default = True
+        self.default_str = v
+        self.optional()
+        return self
+
+    def default_i(self: Field, v: int) -> Field:
+        self.has_default = True
+        self.default_int = v
+        self.optional()
+        return self
+
+    def default_f(self: Field, v: float) -> Field:
+        self.has_default = True
+        self.default_float = v
+        self.optional()
+        return self
+
+    def default_b(self: Field, v: bool) -> Field:
+        self.has_default = True
+        self.default_bool = v
+        self.optional()
+        return self
+
+    def min(self: Field, v: float) -> Field:
+        self.has_min = True
+        self.min_val = v
+        return self
+
+    def max(self: Field, v: float) -> Field:
+        self.has_max = True
+        self.max_val = v
+        return self
+
+    def min_length(self: Field, n: int) -> Field:
+        self.has_min_len = True
+        self.min_len = n
+        return self
+
+    def max_length(self: Field, n: int) -> Field:
+        self.has_max_len = True
+        self.max_len = n
+        return self
+
+    def regex(self: Field, pat: str) -> Field:
+        self.pattern = pat
+        return self
+
+    def email(self: Field) -> Field:
+        self.fmt = "email"
+        return self
+
+    def url(self: Field) -> Field:
+        self.fmt = "url"
+        return self
+
+    def uuid(self: Field) -> Field:
+        self.fmt = "uuid"
+        return self
+
+    def describe(self: Field, desc: str) -> Field:
+        self.description = desc
+        return self
+
+class Schema:
+    name: str
+    fields: list[Field]
+    policy: int
+    custom_validators: list[(ValidatedData) -> list[FieldError]]
+
+    def __init__(self: Schema, name: str) -> None:
+        self.name = name
+        self.fields = []
+        self.policy = POLICY_FORBID
+        self.custom_validators = []
+
+    def set_policy(self: Schema, policy: int) -> None:
+        self.policy = policy
+
+    def add_validator(self: Schema, v: (ValidatedData) -> list[FieldError]) -> None:
+        self.custom_validators.append(v)
+
+    def _add_field(self: Schema, f: Field) -> Field:
+        self.fields.append(f)
+        return f
+
+    def field_str(self: Schema, name: str) -> Field:
+        f: Field = Field(name, "string")
+        return self._add_field(f)
+
+    def field_int(self: Schema, name: str) -> Field:
+        f: Field = Field(name, "int")
+        return self._add_field(f)
+
+    def field_float(self: Schema, name: str) -> Field:
+        f: Field = Field(name, "float")
+        return self._add_field(f)
+
+    def field_bool(self: Schema, name: str) -> Field:
+        f: Field = Field(name, "bool")
+        return self._add_field(f)
+
+    def field_object(self: Schema, name: str, sub: Schema) -> Field:
+        f: Field = Field(name, "object")
+        f.nested_schema = sub
+        return self._add_field(f)
+
+    def field_list(self: Schema, name: str, item_kind: str) -> Field:
+        f: Field = Field(name, "list")
+        f.item_kind = item_kind
+        return self._add_field(f)
+
+    def field_list_schema(self: Schema, name: str, sub: Schema) -> Field:
+        f: Field = Field(name, "list")
+        f.item_kind = "object"
+        f.item_schema = sub
+        return self._add_field(f)
+
+    def get_field(self: Schema, name: str) -> Field | None:
+        i: int = 0
+        while i < len(self.fields):
+            if self.fields[i].name == name:
+                return self.fields[i]
+            i = i + 1
+        return None
+
+    def validate_at(self: Schema, v: JsonValue, prefix: str) -> ValidationResult:
+        data: ValidatedData = ValidatedData()
+        err_list: list[FieldError] = []
+
+        if not nox.json.is_object(v):
+            p: str = prefix
+            if p == "":
+                p = "root"
+            err_list.append(
+                FieldError(p, CODE_EXPECTED_OBJECT, "Expected a JSON object at " + p, "object", _describe_json_kind(v))
+            )
+            return ValidationResult(False, data, err_list)
+
+        # Policy check: unknown/extra fields
+        if self.policy == POLICY_FORBID:
+            n_keys: int = nox.json.object_len(v)
+            ki: int = 0
+            while ki < n_keys:
+                k: str = nox.json.object_key(v, ki)
+                matched: Field | None = self.get_field(k)
+                if matched is None:
+                    p_extra: str = k
+                    if prefix != "":
+                        p_extra = prefix + "." + k
+                    err_list.append(
+                        FieldError(p_extra, CODE_EXTRA_FIELD, "Unexpected unknown field: '" + p_extra + "'", "none", "present")
+                    )
+                ki = ki + 1
+
+        # Field validations in schema order
+        fi: int = 0
+        while fi < len(self.fields):
+            field: Field = self.fields[fi]
+            full_path: str = field.name
+            if prefix != "":
+                full_path = prefix + "." + field.name
+
+            raw_val: JsonValue | None = _object_lookup(v, field.name)
+            if raw_val is None:
+                # Missing from JSON
+                if field.has_default:
+                    if field.kind == "string":
+                        data.set_str(field.name, field.default_str)
+                    elif field.kind == "int":
+                        data.set_int(field.name, field.default_int)
+                    elif field.kind == "float":
+                        data.set_float(field.name, field.default_float)
+                    elif field.kind == "bool":
+                        data.set_bool(field.name, field.default_bool)
+                elif field.mode == MODE_REQUIRED or field.mode == MODE_REQUIRED_NULLABLE:
+                    err_list.append(
+                        FieldError(full_path, CODE_MISSING_FIELD, "Missing required field: '" + full_path + "'", field.kind, "missing")
+                    )
+            else:
+                field_val: JsonValue = raw_val
+                if nox.json.is_null(field_val):
+                    if field.mode == MODE_REQUIRED_NULLABLE or field.mode == MODE_OPTIONAL_NULLABLE:
+                        data.set_null(field.name)
+                    else:
+                        err_list.append(
+                            FieldError(full_path, CODE_UNEXPECTED_NULL, "Field '" + full_path + "' cannot be null", "non-null " + field.kind, "null")
+                        )
+                else:
+                    # Present and not null
+                    if field.kind == "string":
+                        if not nox.json.is_string(field_val):
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected string", "string", _describe_json_kind(field_val))
+                            )
+                        else:
+                            sv: str = nox.json.as_string(field_val)
+                            if field.has_min_len and len(sv) < field.min_len:
+                                err_list.append(
+                                    FieldError(full_path, CODE_STRING_TOO_SHORT, "Field '" + full_path + "' must have at least " + str(field.min_len) + " characters", "length >= " + str(field.min_len), str(len(sv)))
+                                )
+                            if field.has_max_len and len(sv) > field.max_len:
+                                err_list.append(
+                                    FieldError(full_path, CODE_STRING_TOO_LONG, "Field '" + full_path + "' must have at most " + str(field.max_len) + " characters", "length <= " + str(field.max_len), str(len(sv)))
+                                )
+                            if len(field.pattern) > 0 and not nox.regex.is_match(field.pattern, sv):
+                                err_list.append(
+                                    FieldError(full_path, CODE_PATTERN_MISMATCH, "Field '" + full_path + "' does not match pattern: " + field.pattern, field.pattern, sv)
+                                )
+                            if field.fmt == "email" and not validators.is_valid_email(sv):
+                                err_list.append(
+                                    FieldError(full_path, CODE_INVALID_EMAIL, "Field '" + full_path + "' is not a valid email address", "email", sv)
+                                )
+                            if field.fmt == "url" and not validators.is_valid_url(sv):
+                                err_list.append(
+                                    FieldError(full_path, CODE_INVALID_URL, "Field '" + full_path + "' is not a valid absolute URL", "url", sv)
+                                )
+                            if field.fmt == "uuid" and not validators.is_valid_uuid(sv):
+                                err_list.append(
+                                    FieldError(full_path, CODE_INVALID_UUID, "Field '" + full_path + "' is not a valid UUID", "uuid", sv)
+                                )
+                            data.set_str(field.name, sv)
+
+                    elif field.kind == "int":
+                        if not nox.json.is_number(field_val):
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected integer", "int", _describe_json_kind(field_val))
+                            )
+                        else:
+                            nv: float = nox.json.as_number(field_val)
+                            if not validators.is_valid_int(nv):
+                                err_list.append(
+                                    FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected integer without fraction", "int", str(nv))
+                                )
+                            else:
+                                iv: int = int(nv)
+                                if field.has_min and float(iv) < field.min_val:
+                                    err_list.append(
+                                        FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(iv))
+                                    )
+                                if field.has_max and float(iv) > field.max_val:
+                                    err_list.append(
+                                        FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(iv))
+                                    )
+                                data.set_int(field.name, iv)
+
+                    elif field.kind == "float":
+                        if not nox.json.is_number(field_val):
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected float", "float", _describe_json_kind(field_val))
+                            )
+                        else:
+                            fv: float = nox.json.as_number(field_val)
+                            if field.has_min and fv < field.min_val:
+                                err_list.append(
+                                    FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(fv))
+                                )
+                            if field.has_max and fv > field.max_val:
+                                err_list.append(
+                                    FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(fv))
+                                )
+                            data.set_float(field.name, fv)
+
+                    elif field.kind == "bool":
+                        if not nox.json.is_bool(field_val):
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected boolean", "bool", _describe_json_kind(field_val))
+                            )
+                        else:
+                            data.set_bool(field.name, nox.json.as_bool(field_val))
+
+                    elif field.kind == "object":
+                        if not nox.json.is_object(field_val):
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected object", "object", _describe_json_kind(field_val))
+                            )
+                        else:
+                            sub: Schema | None = field.nested_schema
+                            if sub is not None:
+                                sub_res: ValidationResult = sub.validate_at(field_val, full_path)
+                                if not sub_res.is_valid:
+                                    si: int = 0
+                                    while si < len(sub_res.errors):
+                                        err_list.append(sub_res.errors[si])
+                                        si = si + 1
+                                else:
+                                    data.set_object(field.name, sub_res.data)
+
+                    elif field.kind == "list":
+                        if not nox.json.is_array(field_val):
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected array", "list", _describe_json_kind(field_val))
+                            )
+                        else:
+                            alen: int = nox.json.array_len(field_val)
+                            if field.item_kind == "string":
+                                s_items: list[str] = []
+                                ai: int = 0
+                                while ai < alen:
+                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    el_path: str = full_path + "[" + str(ai) + "]"
+                                    if not nox.json.is_string(el):
+                                        err_list.append(
+                                            FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected string", "string", _describe_json_kind(el))
+                                        )
+                                    else:
+                                        s_items.append(nox.json.as_string(el))
+                                    ai = ai + 1
+                                data.set_list_str(field.name, s_items)
+
+                            elif field.item_kind == "int":
+                                i_items: list[int] = []
+                                ai: int = 0
+                                while ai < alen:
+                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    el_path: str = full_path + "[" + str(ai) + "]"
+                                    if not nox.json.is_number(el) or not validators.is_valid_int(nox.json.as_number(el)):
+                                        err_list.append(
+                                            FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected integer", "int", _describe_json_kind(el))
+                                        )
+                                    else:
+                                        i_items.append(int(nox.json.as_number(el)))
+                                    ai = ai + 1
+                                data.set_list_int(field.name, i_items)
+
+                            elif field.item_kind == "float":
+                                f_items: list[float] = []
+                                ai: int = 0
+                                while ai < alen:
+                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    el_path: str = full_path + "[" + str(ai) + "]"
+                                    if not nox.json.is_number(el):
+                                        err_list.append(
+                                            FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected float", "float", _describe_json_kind(el))
+                                        )
+                                    else:
+                                        f_items.append(nox.json.as_number(el))
+                                    ai = ai + 1
+                                data.set_list_float(field.name, f_items)
+
+                            elif field.item_kind == "bool":
+                                b_items: list[bool] = []
+                                ai: int = 0
+                                while ai < alen:
+                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    el_path: str = full_path + "[" + str(ai) + "]"
+                                    if not nox.json.is_bool(el):
+                                        err_list.append(
+                                            FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected boolean", "bool", _describe_json_kind(el))
+                                        )
+                                    else:
+                                        b_items.append(nox.json.as_bool(el))
+                                    ai = ai + 1
+                                data.set_list_bool(field.name, b_items)
+
+                            elif field.item_kind == "object":
+                                o_items: list[ValidatedData] = []
+                                item_sub: Schema | None = field.item_schema
+                                ai: int = 0
+                                while ai < alen:
+                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    el_path: str = full_path + "[" + str(ai) + "]"
+                                    if not nox.json.is_object(el):
+                                        err_list.append(
+                                            FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected object", "object", _describe_json_kind(el))
+                                        )
+                                    else:
+                                        if item_sub is not None:
+                                            el_res: ValidationResult = item_sub.validate_at(el, el_path)
+                                            if not el_res.is_valid:
+                                                ei: int = 0
+                                                while ei < len(el_res.errors):
+                                                    err_list.append(el_res.errors[ei])
+                                                    ei = ei + 1
+                                            else:
+                                                o_items.append(el_res.data)
+                                    ai = ai + 1
+                                data.set_list_object(field.name, o_items)
+            fi = fi + 1
+
+        # Run custom validators only if field-level checks had no errors
+        if len(err_list) == 0:
+            cvi: int = 0
+            while cvi < len(self.custom_validators):
+                cv: (ValidatedData) -> list[FieldError] = self.custom_validators[cvi]
+                c_errs: list[FieldError] = cv(data)
+                ci: int = 0
+                while ci < len(c_errs):
+                    err_list.append(c_errs[ci])
+                    ci = ci + 1
+                cvi = cvi + 1
+
+        return ValidationResult(len(err_list) == 0, data, err_list)
+
+    def validate(self: Schema, v: JsonValue) -> ValidationResult:
+        return self.validate_at(v, "")
+
+    def validate_json(self: Schema, json_str: str) -> ValidationResult:
+        try:
+            v: JsonValue = nox.json.parse(json_str)
+            return self.validate(v)
+        except JsonError as e:
+            data: ValidatedData = ValidatedData()
+            errs: list[FieldError] = []
+            errs.append(FieldError("root", CODE_INVALID_JSON, "Malformed JSON syntax: " + e.message, "valid JSON", "syntax error"))
+            return ValidationResult(False, data, errs)
+
+    def to_json_schema(self: Schema) -> str:
+        w: JsonWriter = JsonWriter()
+        w.begin_object()
+        w.write_key("$schema")
+        w.write_string("https://json-schema.org/draft/2020-12/schema")
+        w.write_key("title")
+        w.write_string(self.name)
+        w.write_key("type")
+        w.write_string("object")
+
+        # Properties
+        w.write_key("properties")
+        w.begin_object()
+        fi: int = 0
+        while fi < len(self.fields):
+            f: Field = self.fields[fi]
+            w.write_key(f.name)
+            w.begin_object()
+
+            if f.kind == "string":
+                w.write_key("type")
+                w.write_string("string")
+                if f.has_min_len:
+                    w.write_key("minLength")
+                    w.write_int(f.min_len)
+                if f.has_max_len:
+                    w.write_key("maxLength")
+                    w.write_int(f.max_len)
+                if len(f.pattern) > 0:
+                    w.write_key("pattern")
+                    w.write_string(f.pattern)
+                if len(f.fmt) > 0:
+                    w.write_key("format")
+                    if f.fmt == "url":
+                        w.write_string("uri")
+                    else:
+                        w.write_string(f.fmt)
+
+            elif f.kind == "int":
+                w.write_key("type")
+                w.write_string("integer")
+                if f.has_min:
+                    w.write_key("minimum")
+                    w.write_int(int(f.min_val))
+                if f.has_max:
+                    w.write_key("maximum")
+                    w.write_int(int(f.max_val))
+
+            elif f.kind == "float":
+                w.write_key("type")
+                w.write_string("number")
+                if f.has_min:
+                    w.write_key("minimum")
+                    w.write_float(f.min_val)
+                if f.has_max:
+                    w.write_key("maximum")
+                    w.write_float(f.max_val)
+
+            elif f.kind == "bool":
+                w.write_key("type")
+                w.write_string("boolean")
+
+            elif f.kind == "list":
+                w.write_key("type")
+                w.write_string("array")
+                w.write_key("items")
+                w.begin_object()
+                if f.item_kind == "string":
+                    w.write_key("type")
+                    w.write_string("string")
+                elif f.item_kind == "int":
+                    w.write_key("type")
+                    w.write_string("integer")
+                elif f.item_kind == "float":
+                    w.write_key("type")
+                    w.write_string("number")
+                elif f.item_kind == "bool":
+                    w.write_key("type")
+                    w.write_string("boolean")
+                w.end_object()
+
+            if len(f.description) > 0:
+                w.write_key("description")
+                w.write_string(f.description)
+
+            w.end_object()
+            fi = fi + 1
+        w.end_object()
+
+        # Required fields list
+        reqs: list[str] = []
+        ri: int = 0
+        while ri < len(self.fields):
+            f_req: Field = self.fields[ri]
+            if f_req.mode == MODE_REQUIRED or f_req.mode == MODE_REQUIRED_NULLABLE:
+                reqs.append(f_req.name)
+            ri = ri + 1
+
+        w.write_key("required")
+        w.begin_array()
+        qi: int = 0
+        while qi < len(reqs):
+            w.write_string(reqs[qi])
+            qi = qi + 1
+        w.end_array()
+
+        w.write_key("additionalProperties")
+        w.write_bool(self.policy == POLICY_IGNORE)
+
+        w.end_object()
+        return w.build()

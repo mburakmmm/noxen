@@ -1,0 +1,88 @@
+# main.nox — Noxen demonstration entry point.
+
+import schema
+import models
+import core
+import serialization
+
+from schema import Schema
+from models import ModelSchema
+from core import Result, ValidatedData
+from serialization import Serializer
+
+class Profile:
+    bio: str
+    website: str | None
+
+    def __init__(self: Profile, bio: str, website: str | None) -> None:
+        self.bio = bio
+        self.website = website
+
+    def to_json(self: Profile) -> str:
+        s: Serializer = Serializer()
+        s.str("bio", self.bio)
+        s.opt_str("website", self.website)
+        return s.build()
+
+class User:
+    name: str
+    age: int
+    email: str
+    profile: Profile | None
+
+    def __init__(self: User, name: str, age: int, email: str, profile: Profile | None) -> None:
+        self.name = name
+        self.age = age
+        self.email = email
+        self.profile = profile
+
+    def to_json(self: User) -> str:
+        s: Serializer = Serializer()
+        s.str("name", self.name)
+        s.int("age", self.age)
+        s.str("email", self.email)
+        p: Profile | None = self.profile
+        if p is None:
+            s.null("profile")
+        else:
+            s.raw_json("profile", p.to_json())
+        return s.build()
+
+# 1. Define schemas
+profile_schema: Schema = Schema("Profile")
+profile_schema.field_str("bio").min_length(3)
+profile_schema.field_str("website").url().optional()
+
+def make_profile(d: ValidatedData) -> Profile:
+    return Profile(d.get_str("bio"), d.get_opt_str("website"))
+
+profile_model: ModelSchema[Profile] = ModelSchema[Profile](profile_schema, make_profile)
+
+user_schema: Schema = Schema("User")
+user_schema.field_str("name").min_length(2).max_length(50)
+user_schema.field_int("age").min(0.0).max(150.0)
+user_schema.field_str("email").email()
+user_schema.field_object("profile", profile_schema).optional()
+
+def make_user(d: ValidatedData) -> User:
+    p_opt: Profile | None = None
+    sub_data: ValidatedData | None = d.get_opt_object("profile")
+    if sub_data is not None:
+        p_opt = make_profile(sub_data)
+    return User(d.get_str("name"), d.get_int("age"), d.get_str("email"), p_opt)
+
+user_model: ModelSchema[User] = ModelSchema[User](user_schema, make_user)
+
+# 2. Parse valid JSON
+json_input: str = "{\"name\":\"Ada Lovelace\",\"age\":36,\"email\":\"ada@example.com\",\"profile\":{\"bio\":\"First Programmer\",\"website\":\"https://noxlang.com\"}}"
+res: Result[User] = user_model.parse_json(json_input)
+
+if res.is_ok:
+    u: User = res.unwrap()
+    print("User validated:", u.name, "Age:", u.age, "Email:", u.email)
+    p: Profile | None = u.profile
+    if p is not None:
+        print("Profile bio:", p.bio, "Website:", p.website)
+    print("Serialized JSON:", u.to_json())
+else:
+    print("Validation failed with", len(res.errors), "errors")

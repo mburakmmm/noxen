@@ -1,0 +1,58 @@
+import nox.test
+import schema
+import validators
+import core
+from schema import Schema
+from core import ValidationResult
+from errors import CODE_OUT_OF_RANGE, CODE_STRING_TOO_SHORT, CODE_STRING_TOO_LONG, CODE_INVALID_EMAIL, CODE_INVALID_URL, CODE_INVALID_UUID, CODE_PATTERN_MISMATCH
+
+# Raw validator functions
+nox.test.assert_true(validators.is_valid_email("alice@example.com"), "email ok")
+nox.test.assert_true(not validators.is_valid_email("bad email"), "email space rejected")
+nox.test.assert_true(not validators.is_valid_email("no_at.com"), "email no @ rejected")
+nox.test.assert_true(not validators.is_valid_email("@domain.com"), "email empty local rejected")
+
+nox.test.assert_true(validators.is_valid_url("https://noxlang.com/docs"), "url ok")
+nox.test.assert_true(validators.is_valid_url("http://localhost:8080"), "http url ok")
+nox.test.assert_true(not validators.is_valid_url("ftp://example.com"), "ftp url rejected")
+nox.test.assert_true(not validators.is_valid_url("/relative/path"), "relative url rejected")
+
+nox.test.assert_true(validators.is_valid_uuid("c9bf9e57-1685-4c89-bafb-ff5af830be8a"), "uuid ok")
+nox.test.assert_true(not validators.is_valid_uuid("c9bf9e5716854c89bafbff5af830be8a"), "uuid without dashes rejected")
+
+nox.test.assert_true(validators.is_valid_int(42.0), "whole float is valid int")
+nox.test.assert_true(not validators.is_valid_int(42.5), "fraction is rejected as int")
+
+# Schema-level enforcement
+s: Schema = Schema("ValidatorsTest")
+s.field_str("username").min_length(3).max_length(10)
+s.field_str("email").email()
+s.field_str("homepage").url()
+s.field_str("token").uuid()
+s.field_str("code").regex("^[A-Z]+-[0-9]+$")
+s.field_int("age").min(18.0).max(120.0)
+
+# Valid payload
+good_json: str = "{\"username\":\"ada\",\"email\":\"ada@lovelace.org\",\"homepage\":\"https://lovelace.org\",\"token\":\"c9bf9e57-1685-4c89-bafb-ff5af830be8a\",\"code\":\"ABC-123\",\"age\":36}"
+good_res: ValidationResult = s.validate_json(good_json)
+nox.test.assert_true(good_res.is_valid, "all constraints satisfied")
+
+# Invalid length & email
+bad_json1: str = "{\"username\":\"a\",\"email\":\"not-an-email\",\"homepage\":\"https://lovelace.org\",\"token\":\"c9bf9e57-1685-4c89-bafb-ff5af830be8a\",\"code\":\"ABC-123\",\"age\":36}"
+bad_res1: ValidationResult = s.validate_json(bad_json1)
+nox.test.assert_true(not bad_res1.is_valid, "bad length and email detected")
+nox.test.assert_eq_int(len(bad_res1.errors), 2, "2 errors found")
+nox.test.assert_eq_str(bad_res1.errors[0].code, CODE_STRING_TOO_SHORT, "short string code")
+nox.test.assert_eq_str(bad_res1.errors[1].code, CODE_INVALID_EMAIL, "invalid email code")
+
+# Invalid url, uuid, regex pattern, and age bounds
+bad_json2: str = "{\"username\":\"ada\",\"email\":\"ada@lovelace.org\",\"homepage\":\"bad_url\",\"token\":\"bad_uuid\",\"code\":\"abc-123\",\"age\":15}"
+bad_res2: ValidationResult = s.validate_json(bad_json2)
+nox.test.assert_true(not bad_res2.is_valid, "multiple invalid constraints detected")
+nox.test.assert_eq_int(len(bad_res2.errors), 4, "4 errors found")
+nox.test.assert_eq_str(bad_res2.errors[0].code, CODE_INVALID_URL, "invalid url code")
+nox.test.assert_eq_str(bad_res2.errors[1].code, CODE_INVALID_UUID, "invalid uuid code")
+nox.test.assert_eq_str(bad_res2.errors[2].code, CODE_PATTERN_MISMATCH, "pattern mismatch code")
+nox.test.assert_eq_str(bad_res2.errors[3].code, CODE_OUT_OF_RANGE, "out of range code")
+
+print("validators_test passed")

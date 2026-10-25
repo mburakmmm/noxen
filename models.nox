@@ -1,0 +1,40 @@
+# models.nox — Typed model binding and generic parser for Noxen.
+
+import schema
+import core
+import errors
+from schema import Schema
+from core import ValidatedData, ValidationResult, Result
+from errors import FieldError
+
+class ModelSchema[T]:
+    schema: Schema
+    factory: (ValidatedData) -> T
+
+    def __init__(self, schema: Schema, factory: (ValidatedData) -> T) -> None:
+        self.schema = schema
+        self.factory = factory
+
+    def validate(self, v: JsonValue) -> ValidationResult:
+        return self.schema.validate(v)
+
+    def validate_json(self, json_str: str) -> ValidationResult:
+        return self.schema.validate_json(json_str)
+
+    def parse(self, v: JsonValue) -> Result[T]:
+        res: ValidationResult = self.schema.validate(v)
+        if not res.is_valid:
+            return Result[T](False, None, res.errors)
+        f: (ValidatedData) -> T = self.factory
+        obj: T = f(res.data)
+        empty_errs: list[FieldError] = []
+        return Result[T](True, obj, empty_errs)
+
+    def parse_json(self, json_str: str) -> Result[T]:
+        res: ValidationResult = self.schema.validate_json(json_str)
+        if not res.is_valid:
+            return Result[T](False, None, res.errors)
+        f: (ValidatedData) -> T = self.factory
+        obj: T = f(res.data)
+        empty_errs: list[FieldError] = []
+        return Result[T](True, obj, empty_errs)
