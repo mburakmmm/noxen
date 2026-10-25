@@ -1,0 +1,96 @@
+# examples/nyx_crud.nox — Database CRUD and Nyx-style typed model integration with SQLite.
+
+import nox.sqlite
+from nox.sqlite import Connection
+import nox.db
+from nox.db import Row
+import schema
+import models
+import core
+import serialization
+import db_adapter
+from schema import Schema
+from models import ModelSchema
+from core import ValidatedData
+from serialization import Serializer
+from db_adapter import DbAdapter
+
+# 1. Define Model
+class Book:
+    id: int
+    title: str
+    author: str
+    pages: int
+    rating: float
+    available: bool
+
+    def __init__(self: Book, id: int, title: str, author: str, pages: int, rating: float, available: bool) -> None:
+        self.id = id
+        self.title = title
+        self.author = author
+        self.pages = pages
+        self.rating = rating
+        self.available = available
+
+# 2. Define Validation Schema
+book_schema: Schema = Schema("Book")
+book_schema.field_int("id").min(1.0)
+book_schema.field_str("title").min_length(1).max_length(100)
+book_schema.field_str("author").min_length(1).max_length(100)
+book_schema.field_int("pages").min(1.0)
+book_schema.field_float("rating").min(0.0).max(5.0)
+book_schema.field_bool("available").default_b(True)
+
+def make_book(d: ValidatedData) -> Book:
+    return Book(
+        d.get_int("id"),
+        d.get_str("title"),
+        d.get_str("author"),
+        d.get_int("pages"),
+        d.get_float("rating"),
+        d.get_bool("available")
+    )
+
+book_model: ModelSchema[Book] = ModelSchema[Book](book_schema, make_book)
+adapter: DbAdapter[Book] = DbAdapter[Book](book_model)
+
+# 3. Initialize Database
+conn: Connection = nox.sqlite.open(":memory:")
+conn.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author TEXT, pages INT, rating REAL, available INT)")
+
+# 4. Insert Records
+conn.execute("INSERT INTO books VALUES (1, 'The Pragmatic Programmer', 'David Thomas', 352, 4.8, 1)")
+conn.execute("INSERT INTO books VALUES (2, 'Designing Data-Intensive Applications', 'Martin Kleppmann', 616, 4.9, 1)")
+conn.execute("INSERT INTO books VALUES (3, 'Clean Architecture', 'Robert C. Martin', 432, 4.3, 0)")
+
+# 5. Query and Map to Typed Book Models via DbAdapter
+rows: list[Row] = conn.query("SELECT id, title, author, pages, rating, available FROM books ORDER BY rating DESC")
+books: list[Book] = adapter.parse_rows(rows)
+
+print("=== Nyx Database Query: All Books ===")
+i: int = 0
+while i < len(books):
+    b: Book = books[i]
+    status: str = "In Stock"
+    if not b.available:
+        status = "Checked Out"
+    print("#" + str(b.id) + ": \"" + b.title + "\" by " + b.author + " (" + str(b.pages) + "p, " + str(b.rating) + "/5.0) - " + status)
+    i = i + 1
+
+# 6. Single Record Query
+row_single: list[Row] = conn.query("SELECT id, title, author, pages, rating, available FROM books WHERE id = 1")
+first_book: Book = adapter.parse_row(row_single[0])
+
+# 7. Serialize Single Record to JSON
+s: Serializer = Serializer()
+s.int("id", first_book.id)
+s.str("title", first_book.title)
+s.str("author", first_book.author)
+s.int("pages", first_book.pages)
+s.float("rating", first_book.rating)
+s.bool("available", first_book.available)
+
+print("\n=== Serialized Book JSON ===")
+print(s.build())
+
+conn.close()

@@ -1,0 +1,82 @@
+# tests/integration/db_adapter_test.nox
+# Verifies database row mapping to ValidatedData and typed ModelSchema via nox.db and nox.sqlite.
+
+import nox.test
+import nox.db
+import nox.sqlite
+from nox.db import Row
+from nox.sqlite import Connection
+import schema
+import models
+import core
+import db_adapter
+from schema import Schema
+from models import ModelSchema
+from core import ValidatedData
+from db_adapter import DbAdapter, row_to_validated_data
+
+class UserRecord:
+    id: int
+    name: str
+    email: str
+    bio: str
+
+    def __init__(self: UserRecord, id: int, name: str, email: str, bio: str) -> None:
+        self.id = id
+        self.name = name
+        self.email = email
+        self.bio = bio
+
+user_schema: Schema = Schema("UserRecord")
+user_schema.field_int("id").ge(1.0)
+user_schema.field_str("name").min_length(1)
+user_schema.field_str("email").email()
+user_schema.field_str("bio").nullable()
+
+def make_user_record(d: ValidatedData) -> UserRecord:
+    b: str = ""
+    if d.has("bio") and not d.is_null("bio"):
+        b = d.get_str("bio")
+    return UserRecord(d.get_int("id"), d.get_str("name"), d.get_str("email"), b)
+
+user_model: ModelSchema[UserRecord] = ModelSchema[UserRecord](user_schema, make_user_record)
+adapter: DbAdapter[UserRecord] = DbAdapter[UserRecord](user_model)
+
+# 1. Setup in-memory SQLite database
+conn: Connection = nox.sqlite.open(":memory:")
+conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, bio TEXT)")
+conn.execute("INSERT INTO users (id, name, email, bio) VALUES (1, 'Alice Smith', 'alice@example.com', 'Systems Engineer')")
+conn.execute("INSERT INTO users (id, name, email, bio) VALUES (2, 'Bob Jones', 'bob@example.com', NULL)")
+
+# 2. Query rows
+rows: list[Row] = conn.query("SELECT id, name, email, bio FROM users ORDER BY id ASC")
+nox.test.assert_eq_int(len(rows), 2, "query returned 2 rows")
+
+# 3. Test single row parsing via adapter
+u1: UserRecord = adapter.parse_row(rows[0])
+nox.test.assert_eq_int(u1.id, 1, "u1 id is 1")
+nox.test.assert_eq_str(u1.name, "Alice Smith", "u1 name is Alice Smith")
+nox.test.assert_eq_str(u1.email, "alice@example.com", "u1 email is alice@example.com")
+nox.test.assert_eq_str(u1.bio, "Systems Engineer", "u1 bio is Systems Engineer")
+
+# 4. Test multiple rows parsing via adapter
+users: list[UserRecord] = adapter.parse_rows(rows)
+nox.test.assert_eq_int(len(users), 2, "adapter parsed 2 users")
+
+u2: UserRecord = users[1]
+nox.test.assert_eq_int(u2.id, 2, "u2 id is 2")
+nox.test.assert_eq_str(u2.name, "Bob Jones", "u2 name is Bob Jones")
+nox.test.assert_eq_str(u2.email, "bob@example.com", "u2 email is bob@example.com")
+nox.test.assert_eq_str(u2.bio, "", "u2 nullable bio is empty string")
+
+# 5. Test direct row_to_validated_data helper
+d1: ValidatedData = row_to_validated_data(rows[0])
+nox.test.assert_true(d1.has("name"), "validated data has name")
+nox.test.assert_eq_str(d1.get_str("name"), "Alice Smith", "validated data name is correct")
+nox.test.assert_eq_int(d1.get_int("id"), 1, "validated data id is correct")
+
+d2: ValidatedData = row_to_validated_data(rows[1])
+nox.test.assert_true(d2.is_null("bio"), "validated data bio is null")
+
+conn.close()
+print("db_adapter_test passed")

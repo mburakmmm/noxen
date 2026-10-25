@@ -2,7 +2,7 @@
 
 > **Statically typed data modeling, parsing, validation, and serialization for the Nox programming language.**
 >
-> Maturity status: **v0.1.0 — Stable Core MVP**. Verified against `noxc 2.0.27+`.
+> Maturity status: **v0.2.0 — Production-Ready Core & Ecosystem Adapters**. Verified against `noxc 2.0.27+`.
 
 ---
 
@@ -12,14 +12,18 @@
 
 ### Highlights
 
-* **Statically Typed Models**: Bind incoming JSON directly into strongly typed Nox classes with compile-time safety.
-* **Strict by Default**: Extra fields are rejected by default (`POLICY_FORBID`), and implicit type coercions are disallowed.
+* **Statically Typed Models**: Bind incoming JSON directly into strongly typed Nox classes with compile-time safety via monomorphised generic `ModelSchema[T]`.
+* **Strict by Default**: Extra fields are rejected by default (`POLICY_FORBID`), and implicit type coercions are disallowed in strict mode.
 * **Nested Models & Collections**: Validate deeply nested objects and arrays with clear dot-and-index error paths (`user.profile.website`, `items[0].id`).
-* **Precise Nullability vs Optionality**: Clean distinction between missing keys, explicit nulls, and default fallbacks.
+* **Precise Nullability vs Optionality**: Clean distinction between missing keys, explicit nulls, and default fallbacks across 4 distinct presence modes.
 * **Format Validators**: Out-of-the-box email, URL (via `nox.url`), and UUID validation.
-* **Cross-Field Custom Validators**: Register custom callback functions for business logic validation.
-* **JSON Serialization**: High-performance serialization from typed model instances back to JSON.
+* **Allowed Choices & Enumerations**: `in_choices` for strings and `in_choices_int` for numeric literals.
+* **Field Aliasing**: Support `camelCase` or reserved JSON keys mapped to snake_case model attributes with `.alias("jsonKey")`.
+* **Resource & Recursion Limits**: Defend against adversarial payloads with configurable `max_depth` (default 32) and `max_errors` (default 50).
+* **Cross-Field Custom Validators**: Register custom callback functions for domain business logic validation.
+* **JSON Serialization**: High-performance serialization from typed model instances back to JSON with `Serializer`.
 * **JSON Schema Generation**: Export schemas directly to standard JSON Schema Draft 2020-12 specifications.
+* **Native Aether & Nyx Adapters**: Ready-to-use HTTP response generators (`json_422`, `json_200`, `json_201`) and database row hydration (`DbAdapter[T]`, `row_to_validated_data`).
 
 ---
 
@@ -43,7 +47,7 @@ Add Noxen to your project's `nox.json`:
     {
       "alias": "noxen",
       "repo": "github.com/mburakmmm/noxen",
-      "ref": "v0.1.0"
+      "ref": "v0.2.0"
     }
   ]
 }
@@ -58,7 +62,7 @@ noxc fetch
 Or install via `noxc`:
 
 ```sh
-noxc add noxen github.com/mburakmmm/noxen --ref v0.1.0
+noxc add noxen github.com/mburakmmm/noxen --ref v0.2.0
 ```
 
 ---
@@ -112,6 +116,55 @@ if res.is_ok:
     print("Welcome,", user.name, "- Email:", user.email)
 else:
     print("Validation failed:", res.errors[0].message)
+```
+
+---
+
+## Ecosystem Integrations
+
+### 1. Aether Web Framework Integration
+
+Noxen provides built-in HTTP adapters in `http_adapter.nox` to validate incoming requests and return standard HTTP 422 Unprocessable Entity responses with structured JSON error details:
+
+```nox
+import nox.http
+from nox.http import HttpRequest, HttpResponse
+import models
+from models import ModelSchema
+import http_adapter
+from http_adapter import json_422, json_201
+
+def handle_user_signup(req: HttpRequest, user_model: ModelSchema[UserDto]) -> HttpResponse:
+    parsed = user_model.parse_json(req.body)
+    if not parsed.is_ok:
+        # Returns HTTP 422 with { error, error_count, errors: [...] }
+        return json_422(parsed.errors)
+
+    dto = parsed.unwrap()
+    # Save user, create response
+    return json_201("{\"status\":\"created\"}")
+```
+
+### 2. Nyx Database Integration
+
+Noxen includes `db_adapter.nox` for transforming standard `nox.db.Row` instances (from SQLite, PostgreSQL, or MySQL) into strongly typed models:
+
+```nox
+import nox.sqlite
+from nox.sqlite import Connection
+import nox.db
+from nox.db import Row
+import db_adapter
+from db_adapter import DbAdapter
+
+conn: Connection = nox.sqlite.open("production.db")
+adapter: DbAdapter[Book] = DbAdapter[Book](book_model)
+
+rows: list[Row] = conn.query("SELECT id, title, author, pages, rating, available FROM books")
+books: list[Book] = adapter.parse_rows(rows)
+
+for b in books:
+    print(b.title, "by", b.author)
 ```
 
 ---
@@ -227,6 +280,24 @@ print(schema_json)
 
 ---
 
+## Benchmarks
+
+Measured on Apple Silicon ARM64 using standard release compiler:
+
+| Operation | Iterations | Time (ms) | Throughput |
+|---|---|---|---|
+| **Flat Model Parsing** | 25,000 | ~39 ms | **~641,000 ops/sec** (~1.5 µs/op) |
+| **Nested Model Parsing** | 25,000 | ~31 ms | **~806,000 ops/sec** (~1.2 µs/op) |
+| **Invalid Payload Rejection** | 25,000 | ~23 ms | **~1,086,000 ops/sec** (~0.9 µs/op) |
+| **Full JSON Round-Trip** | 25,000 | ~32 ms | **~781,000 ops/sec** (~1.3 µs/op) |
+
+Run the benchmarks yourself:
+```sh
+noxc run benchmarks/run_benchmarks.nox
+```
+
+---
+
 ## Feature Support Matrix
 
 | Feature | Status | Notes |
@@ -236,14 +307,21 @@ print(schema_json)
 | Default values | Supported | Applied only on missing fields |
 | Format validation | Supported | Email, URL (`nox.url`), UUID |
 | String length & regex bounds | Supported | `min_length`, `max_length`, `regex` |
-| Numeric bounds | Supported | `min`, `max` inclusive |
-| Nested models (`object`) | Supported | Full recursive path validation |
+| Numeric bounds | Supported | `min`, `max`, `ge`, `le`, `gt`, `lt` |
+| Choices & Enums | Supported | `in_choices` (strings), `in_choices_int` (integers) |
+| Field Aliases | Supported | `.alias("json_key")` |
+| Array Bounds | Supported | `min_items`, `max_items` |
+| Nested models (`object`) | Supported | Full recursive path validation with `max_depth` caps |
 | Arrays / Collections | Supported | Lists of primitives and lists of objects |
+| Coercion Modes | Supported | `COERCION_STRICT` (default) & `COERCION_LAX` |
 | Unknown fields policy | Supported | `POLICY_FORBID` (default) & `POLICY_IGNORE` |
+| Resource Limits | Supported | `max_depth = 32`, `max_errors = 50` caps |
 | Custom validator hooks | Supported | Cross-field callbacks via `add_validator` |
 | Typed Model Binding | Supported | Zero-cost monomorphised `ModelSchema[T]` |
 | JSON Serialization | Supported | Streaming `Serializer` builder |
 | JSON Schema Draft 2020-12 | Supported | Standard-compliant schema generator |
+| Aether Web Adapter | Supported | `json_422`, `json_200`, `json_201` for `nox.http` |
+| Nyx Database Adapter | Supported | `DbAdapter[T]`, `row_to_validated_data` for `nox.db.Row` |
 
 ---
 
@@ -255,29 +333,26 @@ Run the full test suite with:
 noxc test
 ```
 
-All 9 test suites pass without warnings or skips:
+All 15 test suites pass cleanly:
 
 ```text
-nested_profile_test passed
-PASSED: .../tests/integration/nested_profile_test.nox
-serialization_test passed
-PASSED: .../tests/integration/serialization_test.nox
-user_model_test passed
-PASSED: .../tests/integration/user_model_test.nox
+alias_test passed
+choices_test passed
+coercion_test passed
 custom_validator_test passed
-PASSED: .../tests/unit/custom_validator_test.nox
 errors_test passed
-PASSED: .../tests/unit/errors_test.nox
 fields_test passed
-PASSED: .../tests/unit/fields_test.nox
 json_schema_test passed
-PASSED: .../tests/unit/json_schema_test.nox
+limits_test passed
+nested_profile_test passed
+serialization_test passed
 unknown_fields_test passed
-PASSED: .../tests/unit/unknown_fields_test.nox
+user_model_test passed
 validators_test passed
-PASSED: .../tests/unit/validators_test.nox
+db_adapter_test passed
+http_adapter_test passed
 
-9 passed, 0 failed (9 total)
+15 passed, 0 failed (15 total)
 ```
 
 ---
@@ -288,4 +363,5 @@ PASSED: .../tests/unit/validators_test.nox
 * Architecture: See [docs/architecture.md](docs/architecture.md).
 * Validation Specs: See [docs/validation.md](docs/validation.md).
 * Compatibility Matrix: See [docs/compatibility.md](docs/compatibility.md).
+* Integrations Guide: See [docs/integrations.md](docs/integrations.md).
 * License: [MIT](LICENSE)

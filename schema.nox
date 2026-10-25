@@ -1,7 +1,7 @@
 # schema.nox — Declarative schema definition, validation engine, and JSON Schema generation.
 
 import errors
-from errors import FieldError, CODE_INVALID_JSON, CODE_EXPECTED_OBJECT, CODE_MISSING_FIELD, CODE_UNEXPECTED_NULL, CODE_TYPE_MISMATCH, CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE, CODE_STRING_TOO_SHORT, CODE_STRING_TOO_LONG, CODE_INVALID_EMAIL, CODE_INVALID_URL, CODE_INVALID_UUID, CODE_PATTERN_MISMATCH
+from errors import FieldError, CODE_INVALID_JSON, CODE_EXPECTED_OBJECT, CODE_MISSING_FIELD, CODE_UNEXPECTED_NULL, CODE_TYPE_MISMATCH, CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE, CODE_STRING_TOO_SHORT, CODE_STRING_TOO_LONG, CODE_INVALID_EMAIL, CODE_INVALID_URL, CODE_INVALID_UUID, CODE_PATTERN_MISMATCH, CODE_CHOICE_MISMATCH, CODE_ARRAY_TOO_SHORT, CODE_ARRAY_TOO_LONG, CODE_RECURSION_LIMIT, CODE_MAX_ERRORS_EXCEEDED
 import validators
 import core
 from core import ValidatedData, ValidationResult
@@ -19,6 +19,10 @@ MODE_OPTIONAL_NULLABLE: int = 3
 # Unknown field policies
 POLICY_FORBID: int = 0
 POLICY_IGNORE: int = 1
+
+# Coercion modes
+COERCION_STRICT: int = 0
+COERCION_LAX: int = 1
 
 def _describe_json_kind(v: JsonValue) -> str:
     if nox.json.is_null(v):
@@ -44,8 +48,32 @@ def _object_lookup(v: JsonValue, key: str) -> JsonValue | None:
         i = i + 1
     return None
 
+def _try_coerce_int(s: str) -> int | None:
+    if len(s) == 0:
+        return None
+    try:
+        return int(s)
+    except ValueError as e:
+        return None
+
+def _try_coerce_float(s: str) -> float | None:
+    if len(s) == 0:
+        return None
+    try:
+        return float(s)
+    except ValueError as e:
+        return None
+
+def _try_coerce_bool(s: str) -> bool | None:
+    if s == "true" or s == "True" or s == "1":
+        return True
+    if s == "false" or s == "False" or s == "0":
+        return False
+    return None
+
 class Field:
     name: str
+    json_name: str
     kind: str
     mode: int
     has_default: bool
@@ -55,8 +83,10 @@ class Field:
     default_bool: bool
     has_min: bool
     min_val: float
+    is_exclusive_min: bool
     has_max: bool
     max_val: float
+    is_exclusive_max: bool
     has_min_len: bool
     min_len: int
     has_max_len: bool
@@ -64,12 +94,19 @@ class Field:
     pattern: str
     fmt: str
     item_kind: str
+    has_min_items: bool
+    min_items: int
+    has_max_items: bool
+    max_items: int
+    choices: list[str]
+    choices_int: list[int]
     nested_schema: Schema | None
     item_schema: Schema | None
     description: str
 
     def __init__(self: Field, name: str, kind: str) -> None:
         self.name = name
+        self.json_name = ""
         self.kind = kind
         self.mode = MODE_REQUIRED
         self.has_default = False
@@ -79,8 +116,10 @@ class Field:
         self.default_bool = False
         self.has_min = False
         self.min_val = 0.0
+        self.is_exclusive_min = False
         self.has_max = False
         self.max_val = 0.0
+        self.is_exclusive_max = False
         self.has_min_len = False
         self.min_len = 0
         self.has_max_len = False
@@ -88,9 +127,19 @@ class Field:
         self.pattern = ""
         self.fmt = ""
         self.item_kind = ""
+        self.has_min_items = False
+        self.min_items = 0
+        self.has_max_items = False
+        self.max_items = 0
+        self.choices = []
+        self.choices_int = []
         self.nested_schema = None
         self.item_schema = None
         self.description = ""
+
+    def alias(self: Field, json_key: str) -> Field:
+        self.json_name = json_key
+        return self
 
     def optional(self: Field) -> Field:
         if self.mode == MODE_REQUIRED:
@@ -133,11 +182,31 @@ class Field:
     def min(self: Field, v: float) -> Field:
         self.has_min = True
         self.min_val = v
+        self.is_exclusive_min = False
+        return self
+
+    def ge(self: Field, v: float) -> Field:
+        return self.min(v)
+
+    def gt(self: Field, v: float) -> Field:
+        self.has_min = True
+        self.min_val = v
+        self.is_exclusive_min = True
         return self
 
     def max(self: Field, v: float) -> Field:
         self.has_max = True
         self.max_val = v
+        self.is_exclusive_max = False
+        return self
+
+    def le(self: Field, v: float) -> Field:
+        return self.max(v)
+
+    def lt(self: Field, v: float) -> Field:
+        self.has_max = True
+        self.max_val = v
+        self.is_exclusive_max = True
         return self
 
     def min_length(self: Field, n: int) -> Field:
@@ -148,6 +217,24 @@ class Field:
     def max_length(self: Field, n: int) -> Field:
         self.has_max_len = True
         self.max_len = n
+        return self
+
+    def min_items(self: Field, n: int) -> Field:
+        self.has_min_items = True
+        self.min_items = n
+        return self
+
+    def max_items(self: Field, n: int) -> Field:
+        self.has_max_items = True
+        self.max_items = n
+        return self
+
+    def in_choices(self: Field, opts: list[str]) -> Field:
+        self.choices = opts
+        return self
+
+    def in_choices_int(self: Field, opts: list[int]) -> Field:
+        self.choices_int = opts
         return self
 
     def regex(self: Field, pat: str) -> Field:
@@ -174,16 +261,31 @@ class Schema:
     name: str
     fields: list[Field]
     policy: int
+    coercion: int
+    max_depth: int
+    max_errors: int
     custom_validators: list[(ValidatedData) -> list[FieldError]]
 
     def __init__(self: Schema, name: str) -> None:
         self.name = name
         self.fields = []
         self.policy = POLICY_FORBID
+        self.coercion = COERCION_STRICT
+        self.max_depth = 32
+        self.max_errors = 50
         self.custom_validators = []
 
     def set_policy(self: Schema, policy: int) -> None:
         self.policy = policy
+
+    def set_coercion(self: Schema, mode: int) -> None:
+        self.coercion = mode
+
+    def set_max_depth(self: Schema, depth: int) -> None:
+        self.max_depth = depth
+
+    def set_max_errors(self: Schema, limit: int) -> None:
+        self.max_errors = limit
 
     def add_validator(self: Schema, v: (ValidatedData) -> list[FieldError]) -> None:
         self.custom_validators.append(v)
@@ -227,14 +329,21 @@ class Schema:
     def get_field(self: Schema, name: str) -> Field | None:
         i: int = 0
         while i < len(self.fields):
-            if self.fields[i].name == name:
-                return self.fields[i]
+            f: Field = self.fields[i]
+            if f.name == name or (len(f.json_name) > 0 and f.json_name == name):
+                return f
             i = i + 1
         return None
 
-    def validate_at(self: Schema, v: JsonValue, prefix: str) -> ValidationResult:
+    def validate_at(self: Schema, v: JsonValue, prefix: str, depth: int) -> ValidationResult:
         data: ValidatedData = ValidatedData()
         err_list: list[FieldError] = []
+
+        if depth > self.max_depth:
+            err_list.append(
+                FieldError(prefix, CODE_RECURSION_LIMIT, "Maximum nesting depth (" + str(self.max_depth) + ") exceeded", "depth <= " + str(self.max_depth), str(depth))
+            )
+            return ValidationResult(False, data, err_list)
 
         if not nox.json.is_object(v):
             p: str = prefix
@@ -259,17 +368,24 @@ class Schema:
                     err_list.append(
                         FieldError(p_extra, CODE_EXTRA_FIELD, "Unexpected unknown field: '" + p_extra + "'", "none", "present")
                     )
+                    if len(err_list) >= self.max_errors:
+                        err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED, "Error limit reached", str(self.max_errors), str(len(err_list))))
+                        return ValidationResult(False, data, err_list)
                 ki = ki + 1
 
         # Field validations in schema order
         fi: int = 0
         while fi < len(self.fields):
             field: Field = self.fields[fi]
+            effective_key: str = field.name
+            if len(field.json_name) > 0:
+                effective_key = field.json_name
+
             full_path: str = field.name
             if prefix != "":
                 full_path = prefix + "." + field.name
 
-            raw_val: JsonValue | None = _object_lookup(v, field.name)
+            raw_val: JsonValue | None = _object_lookup(v, effective_key)
             if raw_val is None:
                 # Missing from JSON
                 if field.has_default:
@@ -297,12 +413,24 @@ class Schema:
                 else:
                     # Present and not null
                     if field.kind == "string":
-                        if not nox.json.is_string(field_val):
+                        sv_opt: str | None = None
+                        if nox.json.is_string(field_val):
+                            sv_opt = nox.json.as_string(field_val)
+                        elif self.coercion == COERCION_LAX:
+                            if nox.json.is_number(field_val):
+                                sv_opt = str(nox.json.as_number(field_val))
+                            elif nox.json.is_bool(field_val):
+                                if nox.json.as_bool(field_val):
+                                    sv_opt = "true"
+                                else:
+                                    sv_opt = "false"
+
+                        if sv_opt is None:
                             err_list.append(
                                 FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected string", "string", _describe_json_kind(field_val))
                             )
                         else:
-                            sv: str = nox.json.as_string(field_val)
+                            sv: str = sv_opt
                             if field.has_min_len and len(sv) < field.min_len:
                                 err_list.append(
                                     FieldError(full_path, CODE_STRING_TOO_SHORT, "Field '" + full_path + "' must have at least " + str(field.min_len) + " characters", "length >= " + str(field.min_len), str(len(sv)))
@@ -311,6 +439,17 @@ class Schema:
                                 err_list.append(
                                     FieldError(full_path, CODE_STRING_TOO_LONG, "Field '" + full_path + "' must have at most " + str(field.max_len) + " characters", "length <= " + str(field.max_len), str(len(sv)))
                                 )
+                            if len(field.choices) > 0:
+                                matched_choice: bool = False
+                                ci: int = 0
+                                while ci < len(field.choices):
+                                    if field.choices[ci] == sv:
+                                        matched_choice = True
+                                    ci = ci + 1
+                                if not matched_choice:
+                                    err_list.append(
+                                        FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed choices", "choice", sv)
+                                    )
                             if len(field.pattern) > 0 and not nox.regex.is_match(field.pattern, sv):
                                 err_list.append(
                                     FieldError(full_path, CODE_PATTERN_MISMATCH, "Field '" + full_path + "' does not match pattern: " + field.pattern, field.pattern, sv)
@@ -330,52 +469,105 @@ class Schema:
                             data.set_str(field.name, sv)
 
                     elif field.kind == "int":
-                        if not nox.json.is_number(field_val):
+                        iv_opt: int | None = None
+                        if nox.json.is_number(field_val):
+                            nv: float = nox.json.as_number(field_val)
+                            if validators.is_valid_int(nv):
+                                iv_opt = int(nv)
+                        elif self.coercion == COERCION_LAX and nox.json.is_string(field_val):
+                            iv_opt = _try_coerce_int(nox.json.as_string(field_val))
+
+                        if iv_opt is None:
                             err_list.append(
                                 FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected integer", "int", _describe_json_kind(field_val))
                             )
                         else:
-                            nv: float = nox.json.as_number(field_val)
-                            if not validators.is_valid_int(nv):
-                                err_list.append(
-                                    FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected integer without fraction", "int", str(nv))
-                                )
-                            else:
-                                iv: int = int(nv)
-                                if field.has_min and float(iv) < field.min_val:
+                            iv: int = iv_opt
+                            if field.has_min:
+                                if field.is_exclusive_min:
+                                    if float(iv) <= field.min_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val), "> " + str(field.min_val), str(iv))
+                                        )
+                                else:
+                                    if float(iv) < field.min_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(iv))
+                                        )
+                            if field.has_max:
+                                if field.is_exclusive_max:
+                                    if float(iv) >= field.max_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val), "< " + str(field.max_val), str(iv))
+                                        )
+                                else:
+                                    if float(iv) > field.max_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(iv))
+                                        )
+                            if len(field.choices_int) > 0:
+                                matched_i: bool = False
+                                cii: int = 0
+                                while cii < len(field.choices_int):
+                                    if field.choices_int[cii] == iv:
+                                        matched_i = True
+                                    cii = cii + 1
+                                if not matched_i:
                                     err_list.append(
-                                        FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(iv))
+                                        FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed integer choices", "int choice", str(iv))
                                     )
-                                if field.has_max and float(iv) > field.max_val:
-                                    err_list.append(
-                                        FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(iv))
-                                    )
-                                data.set_int(field.name, iv)
+                            data.set_int(field.name, iv)
 
                     elif field.kind == "float":
-                        if not nox.json.is_number(field_val):
+                        fv_opt: float | None = None
+                        if nox.json.is_number(field_val):
+                            fv_opt = nox.json.as_number(field_val)
+                        elif self.coercion == COERCION_LAX and nox.json.is_string(field_val):
+                            fv_opt = _try_coerce_float(nox.json.as_string(field_val))
+
+                        if fv_opt is None:
                             err_list.append(
                                 FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected float", "float", _describe_json_kind(field_val))
                             )
                         else:
-                            fv: float = nox.json.as_number(field_val)
-                            if field.has_min and fv < field.min_val:
-                                err_list.append(
-                                    FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(fv))
-                                )
-                            if field.has_max and fv > field.max_val:
-                                err_list.append(
-                                    FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(fv))
-                                )
+                            fv: float = fv_opt
+                            if field.has_min:
+                                if field.is_exclusive_min:
+                                    if fv <= field.min_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val), "> " + str(field.min_val), str(fv))
+                                        )
+                                else:
+                                    if fv < field.min_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(fv))
+                                        )
+                            if field.has_max:
+                                if field.is_exclusive_max:
+                                    if fv >= field.max_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val), "< " + str(field.max_val), str(fv))
+                                        )
+                                else:
+                                    if fv > field.max_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(fv))
+                                        )
                             data.set_float(field.name, fv)
 
                     elif field.kind == "bool":
-                        if not nox.json.is_bool(field_val):
+                        bv_opt: bool | None = None
+                        if nox.json.is_bool(field_val):
+                            bv_opt = nox.json.as_bool(field_val)
+                        elif self.coercion == COERCION_LAX and nox.json.is_string(field_val):
+                            bv_opt = _try_coerce_bool(nox.json.as_string(field_val))
+
+                        if bv_opt is None:
                             err_list.append(
                                 FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected boolean", "bool", _describe_json_kind(field_val))
                             )
                         else:
-                            data.set_bool(field.name, nox.json.as_bool(field_val))
+                            data.set_bool(field.name, bv_opt)
 
                     elif field.kind == "object":
                         if not nox.json.is_object(field_val):
@@ -385,7 +577,9 @@ class Schema:
                         else:
                             sub: Schema | None = field.nested_schema
                             if sub is not None:
-                                sub_res: ValidationResult = sub.validate_at(field_val, full_path)
+                                if sub.max_depth > self.max_depth:
+                                    sub.max_depth = self.max_depth
+                                sub_res: ValidationResult = sub.validate_at(field_val, full_path, depth + 1)
                                 if not sub_res.is_valid:
                                     si: int = 0
                                     while si < len(sub_res.errors):
@@ -401,6 +595,15 @@ class Schema:
                             )
                         else:
                             alen: int = nox.json.array_len(field_val)
+                            if field.has_min_items and alen < field.min_items:
+                                err_list.append(
+                                    FieldError(full_path, CODE_ARRAY_TOO_SHORT, "Array '" + full_path + "' must contain at least " + str(field.min_items) + " items", "length >= " + str(field.min_items), str(alen))
+                                )
+                            if field.has_max_items and alen > field.max_items:
+                                err_list.append(
+                                    FieldError(full_path, CODE_ARRAY_TOO_LONG, "Array '" + full_path + "' must contain at most " + str(field.max_items) + " items", "length <= " + str(field.max_items), str(alen))
+                                )
+
                             if field.item_kind == "string":
                                 s_items: list[str] = []
                                 ai: int = 0
@@ -474,7 +677,9 @@ class Schema:
                                         )
                                     else:
                                         if item_sub is not None:
-                                            el_res: ValidationResult = item_sub.validate_at(el, el_path)
+                                            if item_sub.max_depth > self.max_depth:
+                                                item_sub.max_depth = self.max_depth
+                                            el_res: ValidationResult = item_sub.validate_at(el, el_path, depth + 1)
                                             if not el_res.is_valid:
                                                 ei: int = 0
                                                 while ei < len(el_res.errors):
@@ -484,6 +689,11 @@ class Schema:
                                                 o_items.append(el_res.data)
                                     ai = ai + 1
                                 data.set_list_object(field.name, o_items)
+
+            if len(err_list) >= self.max_errors:
+                err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED, "Error limit reached", str(self.max_errors), str(len(err_list))))
+                return ValidationResult(False, data, err_list)
+
             fi = fi + 1
 
         # Run custom validators only if field-level checks had no errors
@@ -501,7 +711,7 @@ class Schema:
         return ValidationResult(len(err_list) == 0, data, err_list)
 
     def validate(self: Schema, v: JsonValue) -> ValidationResult:
-        return self.validate_at(v, "")
+        return self.validate_at(v, "", 0)
 
     def validate_json(self: Schema, json_str: str) -> ValidationResult:
         try:
@@ -529,7 +739,11 @@ class Schema:
         fi: int = 0
         while fi < len(self.fields):
             f: Field = self.fields[fi]
-            w.write_key(f.name)
+            prop_key: str = f.name
+            if len(f.json_name) > 0:
+                prop_key = f.json_name
+
+            w.write_key(prop_key)
             w.begin_object()
 
             if f.kind == "string":
@@ -550,25 +764,53 @@ class Schema:
                         w.write_string("uri")
                     else:
                         w.write_string(f.fmt)
+                if len(f.choices) > 0:
+                    w.write_key("enum")
+                    w.begin_array()
+                    ei: int = 0
+                    while ei < len(f.choices):
+                        w.write_string(f.choices[ei])
+                        ei = ei + 1
+                    w.end_array()
 
             elif f.kind == "int":
                 w.write_key("type")
                 w.write_string("integer")
                 if f.has_min:
-                    w.write_key("minimum")
+                    if f.is_exclusive_min:
+                        w.write_key("exclusiveMinimum")
+                    else:
+                        w.write_key("minimum")
                     w.write_int(int(f.min_val))
                 if f.has_max:
-                    w.write_key("maximum")
+                    if f.is_exclusive_max:
+                        w.write_key("exclusiveMaximum")
+                    else:
+                        w.write_key("maximum")
                     w.write_int(int(f.max_val))
+                if len(f.choices_int) > 0:
+                    w.write_key("enum")
+                    w.begin_array()
+                    eii: int = 0
+                    while eii < len(f.choices_int):
+                        w.write_int(f.choices_int[eii])
+                        eii = eii + 1
+                    w.end_array()
 
             elif f.kind == "float":
                 w.write_key("type")
                 w.write_string("number")
                 if f.has_min:
-                    w.write_key("minimum")
+                    if f.is_exclusive_min:
+                        w.write_key("exclusiveMinimum")
+                    else:
+                        w.write_key("minimum")
                     w.write_float(f.min_val)
                 if f.has_max:
-                    w.write_key("maximum")
+                    if f.is_exclusive_max:
+                        w.write_key("exclusiveMaximum")
+                    else:
+                        w.write_key("maximum")
                     w.write_float(f.max_val)
 
             elif f.kind == "bool":
@@ -578,6 +820,12 @@ class Schema:
             elif f.kind == "list":
                 w.write_key("type")
                 w.write_string("array")
+                if f.has_min_items:
+                    w.write_key("minItems")
+                    w.write_int(f.min_items)
+                if f.has_max_items:
+                    w.write_key("maxItems")
+                    w.write_int(f.max_items)
                 w.write_key("items")
                 w.begin_object()
                 if f.item_kind == "string":
@@ -608,7 +856,10 @@ class Schema:
         while ri < len(self.fields):
             f_req: Field = self.fields[ri]
             if f_req.mode == MODE_REQUIRED or f_req.mode == MODE_REQUIRED_NULLABLE:
-                reqs.append(f_req.name)
+                prop_name: str = f_req.name
+                if len(f_req.json_name) > 0:
+                    prop_name = f_req.json_name
+                reqs.append(prop_name)
             ri = ri + 1
 
         w.write_key("required")

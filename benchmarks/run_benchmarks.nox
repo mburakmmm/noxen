@@ -1,0 +1,123 @@
+# benchmarks/run_benchmarks.nox — Performance benchmarks for Noxen.
+
+import nox.time
+from nox.time import Instant
+import schema
+import models
+import core
+import serialization
+from schema import Schema
+from models import ModelSchema
+from core import ValidatedData, Result
+from serialization import Serializer
+
+class User:
+    name: str
+    age: int
+    email: str
+
+    def __init__(self: User, name: str, age: int, email: str) -> None:
+        self.name = name
+        self.age = age
+        self.email = email
+
+    def to_json(self: User) -> str:
+        s: Serializer = Serializer()
+        s.str("name", self.name)
+        s.int("age", self.age)
+        s.str("email", self.email)
+        return s.build()
+
+class Address:
+    city: str
+    country: str
+    def __init__(self: Address, city: str, country: str) -> None:
+        self.city = city
+        self.country = country
+
+class Company:
+    name: str
+    address: Address
+    def __init__(self: Company, name: str, address: Address) -> None:
+        self.name = name
+        self.address = address
+
+# Setup schemas
+user_schema: Schema = Schema("User")
+user_schema.field_str("name").min_length(2)
+user_schema.field_int("age").min(0.0)
+user_schema.field_str("email").email()
+
+def make_user(d: ValidatedData) -> User:
+    return User(d.get_str("name"), d.get_int("age"), d.get_str("email"))
+
+user_model: ModelSchema[User] = ModelSchema[User](user_schema, make_user)
+
+addr_schema: Schema = Schema("Address")
+addr_schema.field_str("city")
+addr_schema.field_str("country")
+
+def make_addr(d: ValidatedData) -> Address:
+    return Address(d.get_str("city"), d.get_str("country"))
+
+comp_schema: Schema = Schema("Company")
+comp_schema.field_str("name")
+comp_schema.field_object("address", addr_schema)
+
+def make_comp(d: ValidatedData) -> Company:
+    return Company(d.get_str("name"), make_addr(d.get_object("address")))
+
+comp_model: ModelSchema[Company] = ModelSchema[Company](comp_schema, make_comp)
+
+flat_json: str = "{\"name\":\"Ada Lovelace\",\"age\":36,\"email\":\"ada@example.com\"}"
+nested_json: str = "{\"name\":\"Acme Corp\",\"address\":{\"city\":\"San Francisco\",\"country\":\"USA\"}}"
+invalid_json: str = "{\"name\":\"A\",\"age\":\"not-int\",\"email\":\"bad-email\"}"
+
+ITERATIONS: int = 25000
+
+print("Running Noxen Benchmarks (" + str(ITERATIONS) + " iterations each)...")
+print("-----------------------------------------------------------------")
+
+# Benchmark 1: Flat Model Parsing
+t1: Instant = nox.time.instant_now()
+i: int = 0
+while i < ITERATIONS:
+    r1: Result[User] = user_model.parse_json(flat_json)
+    i = i + 1
+elapsed1: int = t1.elapsed_ms()
+ops_sec1: int = int((float(ITERATIONS) / (float(elapsed1) / 1000.0)))
+print("1. Flat Model Parsing:    ", elapsed1, "ms  | ", ops_sec1, "ops/sec")
+
+# Benchmark 2: Nested Model Parsing
+t2: Instant = nox.time.instant_now()
+j: int = 0
+while j < ITERATIONS:
+    r2: Result[Company] = comp_model.parse_json(nested_json)
+    j = j + 1
+elapsed2: int = t2.elapsed_ms()
+ops_sec2: int = int((float(ITERATIONS) / (float(elapsed2) / 1000.0)))
+print("2. Nested Model Parsing:  ", elapsed2, "ms  | ", ops_sec2, "ops/sec")
+
+# Benchmark 3: Invalid Payload Rejection
+t3: Instant = nox.time.instant_now()
+k: int = 0
+while k < ITERATIONS:
+    r3: Result[User] = user_model.parse_json(invalid_json)
+    k = k + 1
+elapsed3: int = t3.elapsed_ms()
+ops_sec3: int = int((float(ITERATIONS) / (float(elapsed3) / 1000.0)))
+print("3. Invalid Payload Reject:", elapsed3, "ms  | ", ops_sec3, "ops/sec")
+
+# Benchmark 4: Model JSON Round-Trip
+sample_user: User = User("Ada Lovelace", 36, "ada@example.com")
+t4: Instant = nox.time.instant_now()
+m: int = 0
+while m < ITERATIONS:
+    s_out: str = sample_user.to_json()
+    r4: Result[User] = user_model.parse_json(s_out)
+    m = m + 1
+elapsed4: int = t4.elapsed_ms()
+ops_sec4: int = int((float(ITERATIONS) / (float(elapsed4) / 1000.0)))
+print("4. Full JSON Round-Trip:  ", elapsed4, "ms  | ", ops_sec4, "ops/sec")
+print("-----------------------------------------------------------------")
+print("Benchmark complete.")

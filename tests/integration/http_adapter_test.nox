@@ -1,0 +1,54 @@
+# tests/integration/http_adapter_test.nox
+# Verifies nox.http and Aether HTTP adapter request validation and 422 error generation.
+
+import nox.test
+import nox.http
+from nox.http import HttpRequest, HttpResponse
+import schema
+import models
+import core
+import http_adapter
+from schema import Schema
+from models import ModelSchema
+from core import ValidatedData, Result
+from http_adapter import json_200, json_422
+
+class LoginDto:
+    email: str
+    password: str
+
+    def __init__(self: LoginDto, email: str, password: str) -> None:
+        self.email = email
+        self.password = password
+
+login_schema: Schema = Schema("LoginDto")
+login_schema.field_str("email").email()
+login_schema.field_str("password").min_length(8)
+
+def make_login(d: ValidatedData) -> LoginDto:
+    return LoginDto(d.get_str("email"), d.get_str("password"))
+
+login_model: ModelSchema[LoginDto] = ModelSchema[LoginDto](login_schema, make_login)
+
+# 1. Valid HTTP Request
+req_ok: HttpRequest = HttpRequest("POST", "/api/login", "{\"email\":\"user@example.com\",\"password\":\"SecurePass123!\"}", {}, "127.0.0.1:8080")
+res_ok: Result[LoginDto] = login_model.parse_json(req_ok.body)
+
+nox.test.assert_true(res_ok.is_ok, "valid HTTP body passes")
+dto: LoginDto = res_ok.unwrap()
+nox.test.assert_eq_str(dto.email, "user@example.com", "email extracted")
+resp_ok: HttpResponse = json_200("{\"status\":\"authenticated\"}")
+nox.test.assert_eq_int(resp_ok.status, 200, "status is 200")
+
+# 2. Invalid HTTP Request (invalid email and short password)
+req_bad: HttpRequest = HttpRequest("POST", "/api/login", "{\"email\":\"not-an-email\",\"password\":\"short\"}", {}, "127.0.0.1:8080")
+res_bad: Result[LoginDto] = login_model.parse_json(req_bad.body)
+
+nox.test.assert_true(not res_bad.is_ok, "invalid HTTP body fails")
+nox.test.assert_eq_int(len(res_bad.errors), 2, "2 validation errors")
+
+resp_err: HttpResponse = json_422(res_bad.errors)
+nox.test.assert_eq_int(resp_err.status, 422, "status is 422 Unprocessable Entity")
+nox.test.assert_true(len(resp_err.body) > 0, "422 response body produced")
+
+print("http_adapter_test passed")

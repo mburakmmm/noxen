@@ -1,0 +1,37 @@
+import nox.test
+import schema
+import core
+from schema import Schema, COERCION_STRICT, COERCION_LAX
+from core import ValidationResult
+from errors import CODE_TYPE_MISMATCH
+
+# 1. Strict mode rejects coercion
+s_strict: Schema = Schema("StrictCoerce")
+s_strict.field_int("count")
+s_strict.field_bool("active")
+
+raw_json: str = "{\"count\":\"42\",\"active\":\"true\"}"
+res_strict: ValidationResult = s_strict.validate_json(raw_json)
+
+nox.test.assert_true(not res_strict.is_valid, "strict rejects strings for int/bool")
+nox.test.assert_eq_int(len(res_strict.errors), 2, "2 errors in strict")
+nox.test.assert_eq_str(res_strict.errors[0].code, CODE_TYPE_MISMATCH, "code type_mismatch")
+
+# 2. Lax mode coerces valid convertible types
+s_lax: Schema = Schema("LaxCoerce")
+s_lax.field_int("count")
+s_lax.field_bool("active")
+s_lax.field_float("ratio")
+s_lax.field_str("tag")
+s_lax.set_coercion(COERCION_LAX)
+
+raw_lax_json: str = "{\"count\":\"42\",\"active\":\"true\",\"ratio\":\"3.14\",\"tag\":100}"
+res_lax: ValidationResult = s_lax.validate_json(raw_lax_json)
+
+nox.test.assert_true(res_lax.is_valid, "lax mode succeeds on coercible inputs")
+nox.test.assert_eq_int(res_lax.data.get_int("count"), 42, "coerced int")
+nox.test.assert_true(res_lax.data.get_bool("active"), "coerced bool")
+nox.test.assert_true(res_lax.data.get_float("ratio") > 3.1, "coerced float")
+nox.test.assert_eq_str(res_lax.data.get_str("tag"), "100.0", "coerced str from number")
+
+print("coercion_test passed")

@@ -1,0 +1,55 @@
+# db_adapter.nox — Database adapter for nox.db (SQLite, Postgres, MySQL) and Nyx records.
+
+import nox.db
+from nox.db import Row
+import core
+import models
+from core import ValidatedData
+from models import ModelSchema
+
+def row_to_validated_data(row: Row) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    n: int = row.column_count()
+    i: int = 0
+    while i < n:
+        col: str = row.column_name(i)
+        if row.is_null(i):
+            d.set_null(col)
+        else:
+            s: str = row.get_str(i)
+            d.set_str(col, s)
+            if s == "1" or s == "true" or s == "TRUE" or s == "t":
+                d.set_bool(col, True)
+            elif s == "0" or s == "false" or s == "FALSE" or s == "f":
+                d.set_bool(col, False)
+            try:
+                iv: int = row.get_int(i)
+                d.set_int(col, iv)
+            except ValueError as e1:
+                pass
+            try:
+                fv: float = row.get_float(i)
+                d.set_float(col, fv)
+            except ValueError as e2:
+                pass
+        i = i + 1
+    return d
+
+class DbAdapter[T]:
+    model: ModelSchema[T]
+
+    def __init__(self, model: ModelSchema[T]) -> None:
+        self.model = model
+
+    def parse_row(self, row: Row) -> T:
+        d: ValidatedData = row_to_validated_data(row)
+        f: (ValidatedData) -> T = self.model.factory
+        return f(d)
+
+    def parse_rows(self, rows: list[Row]) -> list[T]:
+        out: list[T] = []
+        i: int = 0
+        while i < len(rows):
+            out.append(self.parse_row(rows[i]))
+            i = i + 1
+        return out

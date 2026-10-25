@@ -1,0 +1,47 @@
+# http_adapter.nox — HTTP adapter for nox.http and Aether responses.
+
+import nox.http
+from nox.http import HttpResponse
+import errors
+from errors import FieldError
+import nox.json
+from nox.json import JsonWriter
+
+def json_422(errs: list[FieldError]) -> HttpResponse:
+    w: JsonWriter = JsonWriter()
+    w.begin_object()
+    w.write_key("error")
+    w.write_string("UnprocessableEntity")
+    w.write_key("error_count")
+    w.write_int(len(errs))
+    w.write_key("errors")
+    w.begin_array()
+    i: int = 0
+    while i < len(errs):
+        e: FieldError = errs[i]
+        w.begin_object()
+        w.write_key("path")
+        w.write_string(e.path)
+        w.write_key("code")
+        w.write_string(e.code)
+        w.write_key("message")
+        w.write_string(e.message)
+        w.write_key("expected")
+        w.write_string(e.expected)
+        w.write_key("actual")
+        w.write_string(e.actual)
+        w.end_object()
+        i = i + 1
+    w.end_array()
+    w.end_object()
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    return HttpResponse(422, w.build(), headers)
+
+def json_200(body_json: str) -> HttpResponse:
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    return HttpResponse(200, body_json, headers)
+
+def json_201(body_json: str) -> HttpResponse:
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    return HttpResponse(201, body_json, headers)

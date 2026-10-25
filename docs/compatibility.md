@@ -91,3 +91,19 @@
    Unknown fields are rejected by default (`Policy.FORBID`), adhering to AGENTS.md §5 and §8.
 4. **Distinction between Missing and Null**:
    A field can be `REQUIRED_NON_NULL`, `REQUIRED_NULLABLE`, `OPTIONAL_NON_NULL` (can be omitted, but if present cannot be null), or `OPTIONAL_NULLABLE` (can be omitted or null).
+
+## 5. Ecosystem Adapter & Generic Class Findings (v0.2.0)
+
+### `nox.http` (Aether Interop)
+- `nox.http.HttpResponse(status: int, body: str, headers: dict[str, str])`
+- `nox.http.HttpRequest(method: str, path: str, body: str, headers: dict[str, str], remote_addr: str)`
+- Noxen's `http_adapter.nox` provides `json_422(errors: list[FieldError]) -> HttpResponse` and `json_200`/`json_201` producing RFC 7807/machine-readable validation response bodies for Aether web handlers.
+
+### `nox.db` and `nox.sqlite` (Nyx Interop)
+- `nox.db.Row` stores column values as strings and provides `.column_count()`, `.column_name(i)`, `.is_null(i)`, `.get_str(i)`, `.get_int(i)`, `.get_float(i)`.
+- Shared row type is unified across SQLite, PostgreSQL, and MySQL.
+- Noxen's `db_adapter.nox` provides `row_to_validated_data(row: Row) -> ValidatedData` and `DbAdapter[T](model)` providing `.parse_row(row: Row) -> T` and `.parse_rows(rows: list[Row]) -> list[T]`.
+
+### Generic Method vs Free Function Monomorphisation
+- **Finding**: In Nox 2.0.27, generic type brackets `[T]` are valid on classes (`class DbAdapter[T]: ...`), but calling generic free functions `def fn[T](...) -> ...` fails with `unknown generic constructor: fn`.
+- **Decision**: All generic operations are modeled as methods on monomorphised classes (`ModelSchema[T]`, `Result[T]`, `DbAdapter[T]`). Non-generic helpers remain free functions.

@@ -1,0 +1,39 @@
+import nox.test
+import schema
+import models
+import core
+from schema import Schema
+from models import ModelSchema
+from core import ValidatedData, Result
+
+class AccountSession:
+    user_id: int
+    auth_token: str
+    is_admin: bool
+
+    def __init__(self: AccountSession, user_id: int, auth_token: str, is_admin: bool) -> None:
+        self.user_id = user_id
+        self.auth_token = auth_token
+        self.is_admin = is_admin
+
+s: Schema = Schema("AccountSession")
+s.field_int("user_id").alias("userId")
+s.field_str("auth_token").alias("authToken")
+s.field_bool("is_admin").alias("isAdmin")
+
+def make_session(d: ValidatedData) -> AccountSession:
+    return AccountSession(d.get_int("user_id"), d.get_str("auth_token"), d.get_bool("is_admin"))
+
+model: ModelSchema[AccountSession] = ModelSchema[AccountSession](s, make_session)
+
+# Incoming JSON uses camelCase
+camel_json: str = "{\"userId\":1001,\"authToken\":\"tok_xyz123\",\"isAdmin\":true}"
+res: Result[AccountSession] = model.parse_json(camel_json)
+
+nox.test.assert_true(res.is_ok, "camelCase payload parsed into snake_case model")
+session: AccountSession = res.unwrap()
+nox.test.assert_eq_int(session.user_id, 1001, "userId mapped to user_id")
+nox.test.assert_eq_str(session.auth_token, "tok_xyz123", "authToken mapped to auth_token")
+nox.test.assert_true(session.is_admin, "isAdmin mapped to is_admin")
+
+print("alias_test passed")

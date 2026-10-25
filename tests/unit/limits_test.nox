@@ -1,0 +1,67 @@
+import nox.test
+import schema
+import core
+from schema import Schema
+from core import ValidationResult
+from errors import CODE_ARRAY_TOO_SHORT, CODE_ARRAY_TOO_LONG, CODE_OUT_OF_RANGE, CODE_MAX_ERRORS_EXCEEDED, CODE_RECURSION_LIMIT
+
+# 1. Array length limits
+s_arr: Schema = Schema("TagsCollection")
+s_arr.field_list("tags", "string").min_items(2).max_items(4)
+
+# Array too short (1 item)
+res_short: ValidationResult = s_arr.validate_json("{\"tags\":[\"a\"]}")
+nox.test.assert_true(not res_short.is_valid, "too short array rejected")
+nox.test.assert_eq_str(res_short.errors[0].code, CODE_ARRAY_TOO_SHORT, "code array_too_short")
+
+# Array too long (5 items)
+res_long: ValidationResult = s_arr.validate_json("{\"tags\":[\"a\",\"b\",\"c\",\"d\",\"e\"]}")
+nox.test.assert_true(not res_long.is_valid, "too long array rejected")
+nox.test.assert_eq_str(res_long.errors[0].code, CODE_ARRAY_TOO_LONG, "code array_too_long")
+
+# 2. Exclusive numeric bounds: gt and lt
+s_bounds: Schema = Schema("ExclusiveBounds")
+s_bounds.field_float("ratio").gt(0.0).lt(1.0)
+
+# Exactly 0.0 rejected with gt(0.0)
+res_gt: ValidationResult = s_bounds.validate_json("{\"ratio\":0.0}")
+nox.test.assert_true(not res_gt.is_valid, "0.0 is rejected by gt(0.0)")
+nox.test.assert_eq_str(res_gt.errors[0].code, CODE_OUT_OF_RANGE, "gt out of range")
+
+# Exactly 1.0 rejected with lt(1.0)
+res_lt: ValidationResult = s_bounds.validate_json("{\"ratio\":1.0}")
+nox.test.assert_true(not res_lt.is_valid, "1.0 is rejected by lt(1.0)")
+nox.test.assert_eq_str(res_lt.errors[0].code, CODE_OUT_OF_RANGE, "lt out of range")
+
+# 0.5 accepted
+res_ok: ValidationResult = s_bounds.validate_json("{\"ratio\":0.5}")
+nox.test.assert_true(res_ok.is_valid, "0.5 satisfies (0.0, 1.0)")
+
+# 3. Maximum error cap to prevent allocation exhaustion
+s_cap: Schema = Schema("CappedErrors")
+s_cap.field_int("a")
+s_cap.field_int("b")
+s_cap.field_int("c")
+s_cap.field_int("d")
+s_cap.set_max_errors(2)
+
+res_capped: ValidationResult = s_cap.validate_json("{}")
+nox.test.assert_true(not res_capped.is_valid, "empty fails required")
+nox.test.assert_true(len(res_capped.errors) <= 3, "errors capped at max limit")
+
+# 4. Recursion depth limit
+sub3: Schema = Schema("L3")
+sub3.field_str("val")
+
+sub2: Schema = Schema("L2")
+sub2.field_object("l3", sub3)
+
+sub1: Schema = Schema("L1")
+sub1.field_object("l2", sub2)
+sub1.set_max_depth(1) # Abort at depth 2
+
+res_depth: ValidationResult = sub1.validate_json("{\"l2\":{\"l3\":{\"val\":\"ok\"}}}")
+nox.test.assert_true(not res_depth.is_valid, "recursion depth aborts")
+nox.test.assert_eq_str(res_depth.errors[0].code, CODE_RECURSION_LIMIT, "code recursion_limit_exceeded")
+
+print("limits_test passed")

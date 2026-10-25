@@ -32,6 +32,8 @@ jobs:
           noxc check models.nox
           noxc check serialization.nox
           noxc check validators.nox
+          noxc check http_adapter.nox
+          noxc check db_adapter.nox
           noxc check noxen.nox
           noxc check main.nox
 
@@ -46,3 +48,9 @@ jobs:
           noxc run examples/strict_validation.nox
           noxc run examples/json_roundtrip.nox
           noxc run examples/custom_validator.nox
+          noxc run examples/aether_server.nox
+          noxc run examples/nyx_crud.nox
+
+      - name: Run benchmarks
+        run: |
+          noxc run benchmarks/run_benchmarks.nox

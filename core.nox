@@ -118,12 +118,20 @@ class ValidatedData:
         return self._floats[k]
 
     def get_bool(self: ValidatedData, k: str) -> bool:
-        return self._bools[k]
+        if k in self._bools:
+            return self._bools[k]
+        if k in self._ints:
+            return self._ints[k] != 0
+        return False
 
     def get_opt_bool(self: ValidatedData, k: str) -> bool | None:
         if self.is_null(k) or not self.has(k):
             return None
-        return self._bools[k]
+        if k in self._bools:
+            return self._bools[k]
+        if k in self._ints:
+            return self._ints[k] != 0
+        return None
 
     def get_object(self: ValidatedData, k: str) -> ValidatedData:
         return self._objs[k]

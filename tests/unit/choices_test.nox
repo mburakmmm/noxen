@@ -1,0 +1,26 @@
+import nox.test
+import schema
+import core
+from schema import Schema
+from core import ValidationResult
+from errors import CODE_CHOICE_MISMATCH
+
+roles: list[str] = ["admin", "editor", "viewer"]
+tiers: list[int] = [1, 2, 3]
+
+s: Schema = Schema("RolePolicy")
+s.field_str("role").in_choices(roles)
+s.field_int("tier").in_choices_int(tiers)
+
+# Valid payload
+good_res: ValidationResult = s.validate_json("{\"role\":\"admin\",\"tier\":1}")
+nox.test.assert_true(good_res.is_valid, "valid choice passed")
+
+# Invalid choices
+bad_res: ValidationResult = s.validate_json("{\"role\":\"superadmin\",\"tier\":9}")
+nox.test.assert_true(not bad_res.is_valid, "invalid choice rejected")
+nox.test.assert_eq_int(len(bad_res.errors), 2, "2 choice mismatch errors")
+nox.test.assert_eq_str(bad_res.errors[0].code, CODE_CHOICE_MISMATCH, "choice mismatch code")
+nox.test.assert_eq_str(bad_res.errors[1].code, CODE_CHOICE_MISMATCH, "int choice mismatch code")
+
+print("choices_test passed")

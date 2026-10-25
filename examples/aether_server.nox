@@ -1,0 +1,90 @@
+# examples/aether_server.nox — Web API request validation & response handling for Aether.
+
+import nox.http
+from nox.http import HttpRequest, HttpResponse
+import schema
+import models
+import core
+import serialization
+import http_adapter
+from schema import Schema
+from models import ModelSchema
+from core import ValidatedData, Result
+from serialization import Serializer
+from http_adapter import json_201, json_422
+
+# 1. Define Request DTO
+class CreateUserDto:
+    username: str
+    email: str
+    role: str
+    age: int
+
+    def __init__(self: CreateUserDto, username: str, email: str, role: str, age: int) -> None:
+        self.username = username
+        self.email = email
+        self.role = role
+        self.age = age
+
+user_schema: Schema = Schema("CreateUserDto")
+user_schema.field_str("username").min_length(3).max_length(30)
+user_schema.field_str("email").email()
+user_schema.field_str("role").in_choices(["admin", "editor", "viewer"])
+user_schema.field_int("age").min(18.0).max(120.0)
+
+def make_create_user(d: ValidatedData) -> CreateUserDto:
+    return CreateUserDto(
+        d.get_str("username"),
+        d.get_str("email"),
+        d.get_str("role"),
+        d.get_int("age")
+    )
+
+user_model: ModelSchema[CreateUserDto] = ModelSchema[CreateUserDto](user_schema, make_create_user)
+
+# 2. Simulated Aether HTTP Request Handler
+def handle_create_user(req: HttpRequest) -> HttpResponse:
+    parsed: Result[CreateUserDto] = user_model.parse_json(req.body)
+    if not parsed.is_ok:
+        # Return HTTP 422 with structured machine-readable validation errors
+        return json_422(parsed.errors)
+
+    dto: CreateUserDto = parsed.unwrap()
+
+    # Domain logic (e.g., save to DB, assign ID)
+    s: Serializer = Serializer()
+    s.int("id", 101)
+    s.str("username", dto.username)
+    s.str("email", dto.email)
+    s.str("role", dto.role)
+    s.str("status", "created")
+
+    return json_201(s.build())
+
+# 3. Test handling invalid request (underage and invalid role)
+print("=== Scenario 1: Invalid Request ===")
+bad_req: HttpRequest = HttpRequest(
+    "POST",
+    "/api/users",
+    "{\"username\":\"john_doe\",\"email\":\"john@example.com\",\"role\":\"superadmin\",\"age\":16}",
+    {},
+    "127.0.0.1:8000"
+)
+bad_resp: HttpResponse = handle_create_user(bad_req)
+print("HTTP Status:", bad_resp.status)
+print("Error Response Body:")
+print(bad_resp.body)
+
+# 4. Test handling valid request
+print("\n=== Scenario 2: Valid Request ===")
+ok_req: HttpRequest = HttpRequest(
+    "POST",
+    "/api/users",
+    "{\"username\":\"jane_dev\",\"email\":\"jane@example.com\",\"role\":\"editor\",\"age\":28}",
+    {},
+    "127.0.0.1:8000"
+)
+ok_resp: HttpResponse = handle_create_user(ok_req)
+print("HTTP Status:", ok_resp.status)
+print("Created Response Body:")
+print(ok_resp.body)
