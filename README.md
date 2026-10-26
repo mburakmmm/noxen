@@ -90,7 +90,7 @@ Add Noxen to your project's `nox.json`:
     {
       "alias": "noxen",
       "repo": "github.com/mburakmmm/noxen",
-      "ref": "v0.8.2"
+      "ref": "v0.8.3"
     }
   ]
 }
@@ -105,7 +105,7 @@ noxc fetch
 Or install via `noxc`:
 
 ```sh
-noxc add noxen github.com/mburakmmm/noxen --ref v0.8.2
+noxc add noxen github.com/mburakmmm/noxen --ref v0.8.3
 ```
 
 ---
@@ -441,12 +441,13 @@ Benchmarked on Apple Silicon (macOS, M-series ARM64) with **`noxc 2.0.27`** usin
 
 | Operation | Iterations | LLVM Throughput | QBE Throughput | LLVM Latency |
 |---|---|---|---|---|
-| **Flat Model Parsing** | 5,000 | **625,000 ops/sec** (8 ms) | **555,555 ops/sec** (9 ms) | ~1.6 µs/op |
-| **Nested Model Parsing** | 5,000 | **555,555 ops/sec** (9 ms) | **500,000 ops/sec** (10 ms) | ~1.8 µs/op |
+| **Flat Model Parsing** | 5,000 | **1,000,000 ops/sec** (5 ms) | **833,333 ops/sec** (6 ms) | ~1.0 µs/op |
+| **Nested Model Parsing** | 5,000 | **714,285 ops/sec** (7 ms) | **625,000 ops/sec** (8 ms) | ~1.4 µs/op |
 | **Invalid Payload Rejection** | 5,000 | **1,000,000 ops/sec** (5 ms) | **1,000,000 ops/sec** (5 ms) | ~1.0 µs/op |
-| **Full JSON Round-Trip** | 5,000 | **714,285 ops/sec** (7 ms) | **625,000 ops/sec** (8 ms) | ~1.4 µs/op |
-| **Deep Hierarchy Parsing (3-Level)** | 5,000 | **454,545 ops/sec** (11 ms) | **384,615 ops/sec** (13 ms) | ~2.2 µs/op |
-| **Fast Model Dump (`dump`)** | 5,000 | **1,250,000 ops/sec** (4 ms) | **1,250,000 ops/sec** (4 ms) | ~0.8 µs/op |
+| **Full JSON Round-Trip** | 5,000 | **714,285 ops/sec** (7 ms) | **714,285 ops/sec** (7 ms) | ~1.4 µs/op |
+| **Deep Hierarchy Parsing (3-Level)** | 5,000 | **416,666 ops/sec** (12 ms) | **384,615 ops/sec** (13 ms) | ~2.4 µs/op |
+| **Fast Model Dump (`dump`)** | 5,000 | **1,666,666 ops/sec** (3 ms) | **1,250,000 ops/sec** (4 ms) | ~0.6 µs/op |
+| **Checked Model Dump (`dump_checked`)** | 5,000 | **714,285 ops/sec** (7 ms) | **625,000 ops/sec** (8 ms) | ~1.4 µs/op |
 | **Validated Model Dump (`dump_validated`)** | 5,000 | **625,000 ops/sec** (8 ms) | **555,555 ops/sec** (9 ms) | ~1.6 µs/op |
 
 Run the benchmarks yourself with either compiler backend:

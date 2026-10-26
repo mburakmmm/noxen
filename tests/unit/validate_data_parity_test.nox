@@ -175,6 +175,29 @@ nox.test.assert_true(not res_mismatch_mem.is_valid, "type mismatch caught safely
 nox.test.assert_eq_str(res_mismatch_mem.errors[0].code, "type_mismatch", "type_mismatch code")
 nox.test.assert_eq_str(res_mismatch_mem.errors[0].path, "name", "name path for mismatch")
 
+# In-memory int field type mismatch (string stored under int key)
+mismatch_int_d: ValidatedData = ValidatedData()
+mismatch_int_d.set_str("name", "Ada Lovelace")
+mismatch_int_d.set_str("email", "ada@example.com")
+mismatch_int_d.set_str("role", "admin")
+mismatch_int_d.set_str("age", "not_an_int") # string stored under int key!
+mismatch_int_d.set_float("score", 98.5)
+mismatch_int_d.set_bool("active", True)
+tags_m: list[str] = ["math"]
+mismatch_int_d.set_list_str("tags", tags_m)
+scores_m: list[int] = [100]
+mismatch_int_d.set_list_int("scores", scores_m)
+addr_m: ValidatedData = ValidatedData()
+addr_m.set_str("street", "12 St James Square")
+addr_m.set_str("city", "London")
+addr_m.set_int("zip", 12345)
+mismatch_int_d.set_object("address", addr_m)
+
+res_mismatch_int: ValidationResult = user_s.validate_data(mismatch_int_d)
+nox.test.assert_true(not res_mismatch_int.is_valid, "int type mismatch caught safely in memory")
+nox.test.assert_eq_str(res_mismatch_int.errors[0].code, "type_mismatch", "type_mismatch code for int")
+nox.test.assert_eq_str(res_mismatch_int.errors[0].path, "age", "age path for int mismatch")
+
 # ----------------------------------------------------------------------
 # Test 8: dump_checked & to_json_checked functionality
 # ----------------------------------------------------------------------
@@ -206,5 +229,69 @@ except ValueError:
     model_threw = True
 nox.test.assert_true(model_threw, "model dump_checked raises ValueError on invalid model state")
 
-print('NOXEN_RESULT_JSON:{"test":"validate_data_parity","valid":true,"parity_cases_verified":8,"dump_checked_verified":true}')
+# Mutate model back to valid state and verify sequential idempotence
+m.set_int("age", 40)
+nox.test.assert_true(m.is_valid(), "model is_valid returns true after restoring valid state")
+restored_json: str = m.dump_checked()
+nox.test.assert_true(len(restored_json) > 0, "model dump_checked succeeds after recovery")
+
+# ----------------------------------------------------------------------
+# Test 9: Unexpected null parity on non-nullable field
+# ----------------------------------------------------------------------
+bad_null_d: ValidatedData = make_valid_data()
+bad_null_d.set_null("name")
+
+res_null_mem: ValidationResult = user_s.validate_data(bad_null_d)
+nox.test.assert_true(not res_null_mem.is_valid, "validate_data rejects unexpected null")
+nox.test.assert_eq_str(res_null_mem.errors[0].code, "unexpected_null", "unexpected_null error code")
+nox.test.assert_eq_str(res_null_mem.errors[0].path, "name", "name path for null")
+
+res_null_json: ValidationResult = user_s.validate_json(user_s.dump(bad_null_d))
+nox.test.assert_true(not res_null_json.is_valid, "validate_json rejects unexpected null")
+nox.test.assert_eq_str(res_null_mem.errors[0].code, res_null_json.errors[0].code, "unexpected_null parity code")
+nox.test.assert_eq_str(res_null_mem.errors[0].path, res_null_json.errors[0].path, "unexpected_null parity path")
+nox.test.assert_eq_str(res_null_mem.errors[0].expected, res_null_json.errors[0].expected, "unexpected_null parity expected")
+
+# ----------------------------------------------------------------------
+# Test 10: Default value fallback parity
+# ----------------------------------------------------------------------
+def_s: Schema = Schema("DefaultModel")
+def_s.field_str("title")
+def_s.field_str("status").default_s("active")
+
+def_d: ValidatedData = ValidatedData()
+def_d.set_str("title", "Project A") # 'status' is missing
+
+res_def_mem: ValidationResult = def_s.validate_data(def_d)
+nox.test.assert_true(res_def_mem.is_valid, "validate_data applies default value on missing field")
+nox.test.assert_eq_str(res_def_mem.data.get_str("status"), "active", "default applied in memory")
+
+res_def_json: ValidationResult = def_s.validate_json("{\"title\":\"Project A\"}")
+nox.test.assert_true(res_def_json.is_valid, "validate_json applies default value on missing field")
+nox.test.assert_eq_str(res_def_json.data.get_str("status"), "active", "default applied in JSON")
+
+# ----------------------------------------------------------------------
+# Test 11: max_errors limit parity
+# ----------------------------------------------------------------------
+limit_s: Schema = Schema("LimitTest")
+limit_s.field_str("f1").min_length(10)
+limit_s.field_str("f2").min_length(10)
+limit_s.field_str("f3").min_length(10)
+limit_s.set_max_errors(2)
+
+bad_limit_d: ValidatedData = ValidatedData()
+bad_limit_d.set_str("f1", "a")
+bad_limit_d.set_str("f2", "b")
+bad_limit_d.set_str("f3", "c")
+
+res_lim_mem: ValidationResult = limit_s.validate_data(bad_limit_d)
+nox.test.assert_true(not res_lim_mem.is_valid, "validate_data enforces max_errors")
+nox.test.assert_eq_int(len(res_lim_mem.errors), 3, "2 field errors + 1 max_errors_exceeded")
+nox.test.assert_eq_str(res_lim_mem.errors[2].code, "max_errors_exceeded", "max_errors_exceeded code in memory")
+
+res_lim_json: ValidationResult = limit_s.validate_json("{\"f1\":\"a\",\"f2\":\"b\",\"f3\":\"c\"}")
+nox.test.assert_true(not res_lim_json.is_valid, "validate_json enforces max_errors")
+nox.test.assert_eq_str(res_lim_mem.errors[2].code, res_lim_json.errors[2].code, "max_errors code parity")
+
+print('NOXEN_RESULT_JSON:{"test":"validate_data_parity","valid":true,"parity_cases_verified":11,"dump_checked_verified":true}')
 print("validate_data_parity_test passed")

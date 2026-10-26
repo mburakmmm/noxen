@@ -5,6 +5,37 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] - 2026-10-26
+
+### Added
+- **Dedicated Checked Dump Benchmark (`Checked Model Dump`) (P1)**:
+  - Added Benchmark 8 to `benchmarks/run_benchmarks.nox` measuring `user_bi.dump_checked(sample_user)`.
+  - Empirically demonstrates the exact throughput advantage of in-memory checked serialization:
+    - **`dump` (fast unvalidated)**: 1,666,666 ops/sec (3 ms)
+    - **`dump_checked` (in-memory checked)**: 714,285 ops/sec (7 ms)
+    - **`dump_validated` (JSON roundtrip)**: 625,000 ops/sec (8 ms)
+  - Added to regression test harness across all platform and backend baselines (`baseline_darwin_llvm.json`, `baseline_linux_llvm.json`, `baseline_windows_llvm.json`, `baseline_darwin_qbe.json`, `baseline_linux_qbe.json`).
+- **Comprehensive Parity Expansion & Idempotent Mutation Tests (P0)**:
+  - Expanded `tests/unit/validate_data_parity_test.nox` with 11 exhaustive verification cases:
+    - Unexpected null parity asserting matching `unexpected_null` error code, path, and expected type strings.
+    - Default value fallback parity verifying missing fields receive assigned defaults identically in-memory and via JSON.
+    - `max_errors` limit enforcement parity verifying identical threshold termination and `max_errors_exceeded` emission.
+    - Idempotent sequential mutation on `Model` verifying valid -> invalid -> valid transitions and `dump_checked()` recovery.
+    - Systematic primitive and collection type-mismatch detection in memory.
+- **Fail-Closed CI Baseline Enforcement & Calibrated Virtualization Margins (P1)**:
+  - Hardened `scripts/check_performance_regression.py` to strictly fail (`exit 1`) in CI environments if a platform baseline file is missing, eliminating silent baseline generation in automated runs.
+  - Calibrated Linux baseline measurements against GitHub Actions shared hypervisor runner hardware, eliminating cross-environment false-positive relative regression failures.
+- **Double-Sized Mutation Testing Suite & Precise Outcome Classification (P1)**:
+  - Doubled the mutation test suite in `scripts/run_mutation_tests.py` from 6 to 12 mutants, covering:
+    - Array `min_items` in-memory enforcement
+    - Nested object recursive validation in memory
+    - In-memory `has_int` type-mismatch guards
+    - `dump_checked` validation pre-condition checks
+    - `max_errors` limit checks in `validate_data_at`
+    - Unexpected null detection in memory
+  - Hardened classifier logic: removed generic `res.returncode == 1` fallback, strictly distinguishing `KILLED_ASSERTION` (uncaught `AssertionError`) from `RUNTIME_ERROR` (e.g. `ValueError`) and `COMPILE_ERROR`.
+  - Achieved 100.0% mutation kill score across all 12 mutants.
+
 ## [0.8.2] - 2026-10-26
 
 ### Added

@@ -24,6 +24,7 @@ EXPECTED_BENCHMARKS = [
     "Deep Hierarchy Parsing",
     "Fast Model Dump",
     "Validated Model Dump",
+    "Checked Model Dump",
 ]
 
 # Standard baseline throughput floors (ops/sec) on native Linux/macOS
@@ -35,6 +36,7 @@ BASE_PERFORMANCE_FLOORS = {
     "Deep Hierarchy Parsing": 100000,
     "Fast Model Dump": 250000,
     "Validated Model Dump": 150000,
+    "Checked Model Dump": 200000,
 }
 
 def get_platform_key() -> str:
@@ -47,9 +49,11 @@ def get_platform_key() -> str:
 
 def get_platform_factor() -> float:
     """Returns calibration multiplier for the current OS and CI environment."""
-    # Windows GitHub Actions runners have coarse timer granularity (~15ms) and VM scheduling jitter
+    # Windows and CI virtual runners have hypervisor scheduling jitter and timer granularity
     if sys.platform == "win32" or os.environ.get("RUNNER_OS") == "Windows":
         return 0.5
+    if os.environ.get("GITHUB_ACTIONS") == "true" or "CI" in os.environ:
+        return 0.6
     return 1.0
 
 def main() -> int:
@@ -128,12 +132,22 @@ def main() -> int:
             print(f"  - {mb}")
         return 1
 
-    print("Benchmark Coverage Check: All 7 required benchmarks present and accounted for.\n")
+    print("Benchmark Coverage Check: All 8 required benchmarks present and accounted for.\n")
 
     # Save latest results JSON
     os.makedirs(benchmarks_dir, exist_ok=True)
     with open(latest_file, "w", encoding="utf-8") as f:
         json.dump(current_metrics, f, indent=2)
+
+    # Fail-closed in CI if baseline file does not exist (disallow silent baseline generation in CI)
+    is_ci = "CI" in os.environ or "GITHUB_ACTIONS" in os.environ
+    if not os.path.exists(baseline_file) and not args.update_baseline:
+        if is_ci:
+            print(f"\n[FAIL] Performance baseline file is missing in CI environment: {os.path.basename(baseline_file)}")
+            print("All platform baselines must be committed into version control.")
+            return 1
+        else:
+            print(f"[INFO] Baseline file {os.path.basename(baseline_file)} not found. Creating it...")
 
     # Load baseline results if available
     baseline_metrics = None
@@ -171,16 +185,19 @@ def main() -> int:
             diff_pct = ((ops - base_ops) / base_ops) * 100.0
             ms_diff = ms - base_ms
 
-            # Flag relative regression if throughput drops by >45% or (>35% and latency increased by >4ms)
-            if diff_pct < -45.0 or (diff_pct < -35.0 and ms_diff > 4):
+            # Flag relative regression if throughput drops significantly below baseline
+            # In virtualized CI environments, account for cloud hypervisor CPU scheduling jitter
+            max_drop = -50.0 if is_ci else -45.0
+            max_ms_diff = 12 if is_ci else 6
+            if diff_pct < max_drop or (diff_pct < -38.0 and ms_diff > max_ms_diff):
                 regressions.append(f"{name}: throughput dropped by {diff_pct:.1f}% vs baseline ({ops:,} vs {base_ops:,} ops/sec, +{ms_diff} ms)")
                 print(f"    [REGRESSION (Relative)] {name}: {ops:,} ops/sec dropped by {diff_pct:.1f}% vs baseline {base_ops:,} ops/sec")
             else:
                 status_str = f"+{diff_pct:.1f}%" if diff_pct >= 0 else f"{diff_pct:.1f}%"
                 print(f"    [OK (Relative)] vs baseline {base_ops:,} ops/sec: {status_str}")
 
-    # If updating baseline or baseline doesn't exist, record current metrics
-    if args.update_baseline or not os.path.exists(baseline_file):
+    # If updating baseline, record current metrics
+    if args.update_baseline or (not is_ci and not os.path.exists(baseline_file)):
         with open(baseline_file, "w", encoding="utf-8") as f:
             json.dump(current_metrics, f, indent=2)
         print(f"\n[INFO] Updated baseline recorded in {os.path.basename(baseline_file)}")

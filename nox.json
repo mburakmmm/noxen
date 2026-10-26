@@ -1,6 +1,6 @@
 {
   "name": "noxen",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "entry": "main.nox",
   "requires": []
 }

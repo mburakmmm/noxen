@@ -406,8 +406,45 @@ if elapsed7 <= 0:
 ops_sec7: int = int((float(ITERATIONS) / (float(elapsed7) / 1000.0)))
 print("7. Validated Model Dump (chk):  ", elapsed7, "ms (median) | ", ops_sec7, "ops/sec")
 
+# Benchmark 8: Checked Model Dump (dump_checked with In-Memory Validation)
+w8_warm: int = 0
+while w8_warm < WARMUP_ITERS:
+    d_w8: str = user_bi.dump_checked(sample_user)
+    w8_warm = w8_warm + 1
+
+t8_a: Instant = nox.time.instant_now()
+w8_a: int = 0
+chk8: int = 0
+while w8_a < ITERATIONS:
+    dumped_c_a: str = user_bi.dump_checked(sample_user)
+    chk8 = chk8 + len(dumped_c_a)
+    w8_a = w8_a + 1
+el8_a: int = t8_a.elapsed_ms()
+
+t8_b: Instant = nox.time.instant_now()
+w8_b: int = 0
+while w8_b < ITERATIONS:
+    dumped_c_b: str = user_bi.dump_checked(sample_user)
+    chk8 = chk8 + len(dumped_c_b)
+    w8_b = w8_b + 1
+el8_b: int = t8_b.elapsed_ms()
+
+t8_c: Instant = nox.time.instant_now()
+w8_c: int = 0
+while w8_c < ITERATIONS:
+    dumped_c_c: str = user_bi.dump_checked(sample_user)
+    chk8 = chk8 + len(dumped_c_c)
+    w8_c = w8_c + 1
+el8_c: int = t8_c.elapsed_ms()
+
+elapsed8: int = median3(el8_a, el8_b, el8_c)
+if elapsed8 <= 0:
+    elapsed8 = 1
+ops_sec8: int = int((float(ITERATIONS) / (float(elapsed8) / 1000.0)))
+print("8. Checked Model Dump (mem):    ", elapsed8, "ms (median) | ", ops_sec8, "ops/sec")
+
 # Prevent dead code elimination across all benchmarks
-total_checksum: int = chk1 + chk2 + chk3 + chk4 + chk5 + chk6 + chk7
+total_checksum: int = chk1 + chk2 + chk3 + chk4 + chk5 + chk6 + chk7 + chk8
 if total_checksum == 0:
     print("Warning: checksum zero")
 

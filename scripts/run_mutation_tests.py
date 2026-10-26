@@ -62,6 +62,48 @@ MUTATIONS = [
         "mutated": "if False and self.policy == POLICY_FORBID:\n            t_keys: list[str] = data.top_level_keys()",
         "test": "tests/unit/validate_data_parity_test.nox",
     },
+    {
+        "name": "Mutant 7: Disable array min_items check in validate_data_at",
+        "file": "schema.nox",
+        "original": "alen: int = data.list_len(field.name)\n                    if alen < 0:\n                        err_list.append(\n                            FieldError(full_path, CODE_TYPE_MISMATCH, \"Field '\" + full_path + \"' expected array\", \"list\", data.kind_of(field.name))\n                        )\n                    else:\n                        if field.has_min_items and alen < field.min_items:",
+        "mutated": "alen: int = data.list_len(field.name)\n                    if alen < 0:\n                        err_list.append(\n                            FieldError(full_path, CODE_TYPE_MISMATCH, \"Field '\" + full_path + \"' expected array\", \"list\", data.kind_of(field.name))\n                        )\n                    else:\n                        if False and field.has_min_items and alen < field.min_items:",
+        "test": "tests/unit/validate_data_parity_test.nox",
+    },
+    {
+        "name": "Mutant 8: Disable nested object validation in validate_data_at",
+        "file": "schema.nox",
+        "original": "sub_s.validate_data_at(sub_data, full_path, depth + 1)\n                            if not sub_res.is_valid:",
+        "mutated": "sub_s.validate_data_at(sub_data, full_path, depth + 1)\n                            if False and not sub_res.is_valid:",
+        "test": "tests/unit/validate_data_parity_test.nox",
+    },
+    {
+        "name": "Mutant 9: Disable in-memory has_int type check in validate_data_at",
+        "file": "schema.nox",
+        "original": "if not data.has_int(field.name):",
+        "mutated": "if False and not data.has_int(field.name):",
+        "test": "tests/unit/validate_data_parity_test.nox",
+    },
+    {
+        "name": "Mutant 10: Disable dump_checked in-memory validation check",
+        "file": "schema.nox",
+        "original": "res: ValidationResult = self.validate_data(data)\n        if not res.is_valid:\n            err_msg: str = \"Validation failed in dump_checked\"",
+        "mutated": "res: ValidationResult = self.validate_data(data)\n        if False and not res.is_valid:\n            err_msg: str = \"Validation failed in dump_checked\"",
+        "test": "tests/unit/validate_data_parity_test.nox",
+    },
+    {
+        "name": "Mutant 11: Disable max_errors limit check in validate_data_at",
+        "file": "schema.nox",
+        "original": "            if len(err_list) >= self.max_errors:\n                err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED",
+        "mutated": "            if False and len(err_list) >= self.max_errors:\n                err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED",
+        "test": "tests/unit/validate_data_parity_test.nox",
+    },
+    {
+        "name": "Mutant 12: Invert unexpected null check in validate_data_at",
+        "file": "schema.nox",
+        "original": "            elif is_null_val:\n                # Field is explicitly null\n                if field.mode == MODE_REQUIRED_NULLABLE or field.mode == MODE_OPTIONAL_NULLABLE:\n                    data.set_null(field.name)\n                else:\n                    err_list.append(\n                        FieldError(full_path, CODE_UNEXPECTED_NULL",
+        "mutated": "            elif False and is_null_val:\n                # Field is explicitly null\n                if field.mode == MODE_REQUIRED_NULLABLE or field.mode == MODE_OPTIONAL_NULLABLE:\n                    data.set_null(field.name)\n                else:\n                    err_list.append(\n                        FieldError(full_path, CODE_UNEXPECTED_NULL",
+        "test": "tests/unit/validate_data_parity_test.nox",
+    },
 ]
 
 def copy_repo_to_workspace(src_dir: str, dst_dir: str) -> None:
@@ -152,7 +194,7 @@ def main() -> int:
                     if "syntax error:" in output_combined or "type error:" in output_combined or "codegen:" in output_combined:
                         compile_errors += 1
                         print(f"    [COMPILE_ERROR] Test '{rel_test}' failed with compiler error (exit code {res.returncode})")
-                    elif "assertionerror" in output_combined or "assert" in output_combined or "failed" in output_combined or res.returncode == 1:
+                    elif "assertionerror" in output_combined or "assertion failed" in output_combined:
                         killed_assertion += 1
                         print(f"    [KILLED_ASSERTION] Test '{rel_test}' caught mutant via assertion failure (exit code {res.returncode})!")
                     else:

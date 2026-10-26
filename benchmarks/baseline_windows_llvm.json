@@ -33,5 +33,10 @@
     "name": "Validated Model Dump (chk)",
     "ms": 16,
     "ops_sec": 312500
+  },
+  "Checked Model Dump": {
+    "name": "Checked Model Dump (mem)",
+    "ms": 14,
+    "ops_sec": 357142
   }
 }
