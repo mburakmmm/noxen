@@ -7,6 +7,7 @@ on:
 
 jobs:
   test:
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -86,17 +87,17 @@ jobs:
 
       - name: Verify LLVM and QBE Backend Parity
         run: |
-          python scripts/verify_backend_parity.py
+          python -u scripts/verify_backend_parity.py
 
       - name: Verify JSON Schema with independent Draft 2020-12 validator
         run: |
           pip install jsonschema
-          python scripts/verify_json_schema.py
+          python -u scripts/verify_json_schema.py
 
       - name: Run mutation testing suite
         run: |
-          python scripts/run_mutation_tests.py
+          python -u scripts/run_mutation_tests.py
 
       - name: Verify zero performance regressions
         run: |
-          python scripts/check_performance_regression.py
+          python -u scripts/check_performance_regression.py

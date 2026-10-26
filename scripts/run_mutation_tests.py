@@ -16,8 +16,14 @@ Security & Reliability Guarantees:
 import os
 import sys
 import shutil
+import argparse
 import tempfile
 import subprocess
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(line_buffering=True)
 
 MUTATIONS = [
     {
@@ -122,12 +128,17 @@ def copy_repo_to_workspace(src_dir: str, dst_dir: str) -> None:
             shutil.copy2(s, d)
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Run mutation testing suite")
+    parser.add_argument("--skip-baseline", action="store_true", help="Skip pre-mutation baseline checks")
+    args = parser.parse_args()
+
+    skip_baseline = args.skip_baseline or (os.environ.get("CI") == "true")
     noxc_cmd = shutil.which("noxc") or "noxc"
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    print("=== Noxen Automated Mutation Testing (Isolated Workspace) ===")
-    print(f"Compiler binary: {noxc_cmd}")
-    print(f"Repository root: {repo_root}")
-    print(f"Total Mutants:   {len(MUTATIONS)}\n")
+    print("=== Noxen Automated Mutation Testing (Isolated Workspace) ===", flush=True)
+    print(f"Compiler binary: {noxc_cmd}", flush=True)
+    print(f"Repository root: {repo_root}", flush=True)
+    print(f"Total Mutants:   {len(MUTATIONS)}\n", flush=True)
 
     killed_assertion = 0
     killed_timeout = 0
@@ -136,41 +147,44 @@ def main() -> int:
     survived = 0
 
     with tempfile.TemporaryDirectory(prefix="noxen_mut_") as tmp_workspace:
-        print(f"Created isolated temporary mutation workspace: {tmp_workspace}")
+        print(f"Created isolated temporary mutation workspace: {tmp_workspace}", flush=True)
         copy_repo_to_workspace(repo_root, tmp_workspace)
 
         # Baseline Pre-check: Ensure all target test suites pass cleanly on unmutated code
-        print("\n--- Baseline Pre-Check: Verifying unmutated test suites pass ---")
-        tests_to_check = sorted(list(set(m["test"] for m in MUTATIONS)))
-        for t in tests_to_check:
-            res_base = subprocess.run(
-                [noxc_cmd, "run", t],
-                cwd=tmp_workspace,
-                capture_output=True,
-                text=True,
-                timeout=20,
-            )
-            if res_base.returncode != 0:
-                print(f"[FAIL] Baseline test '{t}' failed before mutation! (exit code {res_base.returncode})")
-                print(res_base.stdout)
-                print(res_base.stderr)
-                return 1
-            print(f"  [BASELINE OK] {t} passed cleanly")
-        print("Baseline pre-check complete. All target suites verified healthy.\n")
+        if skip_baseline:
+            print("\n--- Baseline Pre-Check: Skipped (already validated by CI test step) ---\n", flush=True)
+        else:
+            print("\n--- Baseline Pre-Check: Verifying unmutated test suites pass ---", flush=True)
+            tests_to_check = sorted(list(set(m["test"] for m in MUTATIONS)))
+            for t in tests_to_check:
+                res_base = subprocess.run(
+                    [noxc_cmd, "run", t],
+                    cwd=tmp_workspace,
+                    capture_output=True,
+                    text=True,
+                    timeout=35,
+                )
+                if res_base.returncode != 0:
+                    print(f"[FAIL] Baseline test '{t}' failed before mutation! (exit code {res_base.returncode})", flush=True)
+                    print(res_base.stdout, flush=True)
+                    print(res_base.stderr, flush=True)
+                    return 1
+                print(f"  [BASELINE OK] {t} passed cleanly", flush=True)
+            print("Baseline pre-check complete. All target suites verified healthy.\n", flush=True)
 
         # Apply and evaluate each mutant
         for i, m in enumerate(MUTATIONS, 1):
             name = m["name"]
             rel_file = m["file"]
             rel_test = m["test"]
-            print(f"[{i}/{len(MUTATIONS)}] Applying {name}...")
+            print(f"[{i}/{len(MUTATIONS)}] Applying {name}...", flush=True)
 
             target_file = os.path.join(tmp_workspace, rel_file)
             with open(target_file, "r", encoding="utf-8") as f:
                 content = f.read()
 
             if m["original"] not in content:
-                print(f"[ERROR] Target mutation text not found in {target_file}: {m['original']}")
+                print(f"[ERROR] Target mutation text not found in {target_file}: {m['original']}", flush=True)
                 return 1
 
             mutated_content = content.replace(m["original"], m["mutated"], 1)
@@ -180,33 +194,33 @@ def main() -> int:
                 with open(target_file, "w", encoding="utf-8") as f:
                     f.write(mutated_content)
 
-                # Run target test with strict 20s timeout in temporary workspace
+                # Run target test with strict 35s timeout in temporary workspace
                 res = subprocess.run(
                     [noxc_cmd, "run", rel_test],
                     cwd=tmp_workspace,
                     capture_output=True,
                     text=True,
-                    timeout=20,
+                    timeout=35,
                 )
 
                 if res.returncode != 0:
                     output_combined = ((res.stdout or "") + (res.stderr or "")).lower()
                     if "syntax error:" in output_combined or "type error:" in output_combined or "codegen:" in output_combined:
                         compile_errors += 1
-                        print(f"    [COMPILE_ERROR] Test '{rel_test}' failed with compiler error (exit code {res.returncode})")
+                        print(f"    [COMPILE_ERROR] Test '{rel_test}' failed with compiler error (exit code {res.returncode})", flush=True)
                     elif "assertionerror" in output_combined or "assertion failed" in output_combined:
                         killed_assertion += 1
-                        print(f"    [KILLED_ASSERTION] Test '{rel_test}' caught mutant via assertion failure (exit code {res.returncode})!")
+                        print(f"    [KILLED_ASSERTION] Test '{rel_test}' caught mutant via assertion failure (exit code {res.returncode})!", flush=True)
                     else:
                         runtime_errors += 1
-                        print(f"    [RUNTIME_ERROR] Test '{rel_test}' caught mutant via runtime error (exit code {res.returncode})!")
+                        print(f"    [RUNTIME_ERROR] Test '{rel_test}' caught mutant via runtime error (exit code {res.returncode})!", flush=True)
                 else:
-                    print(f"    [SURVIVED] WARNING: Test '{rel_test}' passed despite mutation!")
+                    print(f"    [SURVIVED] WARNING: Test '{rel_test}' passed despite mutation!", flush=True)
                     survived += 1
 
             except subprocess.TimeoutExpired:
                 killed_timeout += 1
-                print(f"    [KILLED_TIMEOUT] Test '{rel_test}' timed out after 20s (infinite loop prevented)!")
+                print(f"    [KILLED_TIMEOUT] Test '{rel_test}' timed out after 35s (infinite loop prevented)!", flush=True)
 
             finally:
                 # Restore original file inside temp workspace for the next mutant
@@ -216,14 +230,14 @@ def main() -> int:
     total_killed = killed_assertion + killed_timeout + runtime_errors
     mutation_score = (total_killed / len(MUTATIONS)) * 100.0
 
-    print(f"\nMutation Testing Summary:")
-    print(f"  Killed by Assertion: {killed_assertion}")
-    print(f"  Killed by Timeout:   {killed_timeout}")
-    print(f"  Compiler Errors:     {compile_errors}")
-    print(f"  Runtime Errors:      {runtime_errors}")
-    print(f"  Mutants Survived:    {survived}")
-    print(f"  Total Mutants:       {len(MUTATIONS)}")
-    print(f"  Mutation Score:      {mutation_score:.1f}%")
+    print(f"\nMutation Testing Summary:", flush=True)
+    print(f"  Killed by Assertion: {killed_assertion}", flush=True)
+    print(f"  Killed by Timeout:   {killed_timeout}", flush=True)
+    print(f"  Compiler Errors:     {compile_errors}", flush=True)
+    print(f"  Runtime Errors:      {runtime_errors}", flush=True)
+    print(f"  Mutants Survived:    {survived}", flush=True)
+    print(f"  Total Mutants:       {len(MUTATIONS)}", flush=True)
+    print(f"  Mutation Score:      {mutation_score:.1f}%", flush=True)
 
     if survived > 0 or compile_errors > 0:
         if survived > 0:

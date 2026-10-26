@@ -16,6 +16,11 @@ import shutil
 import argparse
 import subprocess
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(line_buffering=True)
+
 TARGETS = [
     {
         "path": "tests/unit/auto_schema_test.nox",
