@@ -21,12 +21,16 @@ jobs:
 
       - name: Install Nox (Linux / macOS)
         if: runner.os != 'Windows'
+        env:
+          NOX_VERSION: v2.0.27
         run: |
           curl -fsSL https://raw.githubusercontent.com/mburakmmm/nox-lang/main/install.sh | bash
           echo "$HOME/.nox-lang/bin" >> "$GITHUB_PATH"
 
       - name: Install Nox (Windows)
         if: runner.os == 'Windows'
+        env:
+          NOX_VERSION: v2.0.27
         run: |
           irm https://raw.githubusercontent.com/mburakmmm/nox-lang/main/install.ps1 | iex
           echo "$env:USERPROFILE\.nox-lang\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
