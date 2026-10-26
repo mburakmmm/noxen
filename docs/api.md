@@ -32,6 +32,8 @@ Top-level constructors that automatically inspect a domain class signature via s
 * Maps `T | None` optionals to `.optional().nullable()`.
 * Maps `list[str]`, `list[int]`, `list[float]`, `list[bool]` to primitive arrays.
 * Recursively derives schemas for nested classes (`field_object`) and arrays of classes (`field_list_schema`).
+* Detects self-referential or cyclic models (`Category` referencing `Category`), raising `ValueError` to prevent infinite recursion.
+* Strictly rejects unrecognized or unmappable types with `ValueError`, guaranteeing zero silent field omission.
 * Raises `ValueError` if the specified class name is not found in the compilation reflection index.
 
 ### `Schema` (`schema.nox`)
@@ -153,10 +155,10 @@ Streaming fluent builder for high-performance JSON serialization (strict duplica
 * `is_strict_keys() -> bool`: Returns whether strict key checking is active.
 * `str(k, v)`, `opt_str(k, v)`
 * `int(k, v)`, `opt_int(k, v)`
-* `float(k, v)`, `opt_float(k, v)`
+* `float(k, v)`, `opt_float(k, v)`: Emits float values. Strictly rejects non-finite floats (`NaN`, `Infinity`, `-Infinity`) with `ValueError` to prevent invalid JSON generation.
 * `bool(k, v)`, `opt_bool(k, v)`
 * `null(k)`
-* `list_str(k, items)`, `list_int(k, items)`, `list_float(k, items)`, `list_bool(k, items)`
+* `list_str(k, items)`, `list_int(k, items)`, `list_float(k, items)`, `list_bool(k, items)`: Emits arrays. `list_float` rejects arrays containing non-finite floats with `ValueError`.
 * `raw_json(k, json_text)`, `opt_raw_json(k, json_text)`
 * `has_written_key(k: str) -> bool`: Checks if a JSON key has already been recorded by the serializer.
 * `include_extras(data: ValidatedData)`: Automatically serializes extra fields captured under `POLICY_ALLOW`. Checks `has_written_key` to guarantee duplicate keys are never emitted.

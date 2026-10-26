@@ -349,6 +349,22 @@ class Field:
         self.description = desc
         return self
 
+def _is_in_derivation_stack(stack: list[str], name: str) -> bool:
+    i: int = 0
+    while i < len(stack):
+        if stack[i] == name:
+            return True
+        i = i + 1
+    return False
+
+def _copy_derivation_stack(stack: list[str]) -> list[str]:
+    res: list[str] = []
+    i: int = 0
+    while i < len(stack):
+        res.append(stack[i])
+        i = i + 1
+    return res
+
 class Schema:
     name: str
     fields: list[Field]
@@ -437,57 +453,86 @@ class Schema:
         raise ValueError("Field '" + name + "' not found in schema '" + self.name + "'")
 
     def derive_from_class(self: Schema, class_name: str) -> Schema:
+        init_stack: list[str] = []
+        return self.derive_from_class_internal(class_name, init_stack)
+
+    def derive_from_class_internal(self: Schema, class_name: str, stack: list[str]) -> Schema:
+        if _is_in_derivation_stack(stack, class_name):
+            raise ValueError("Recursive model cycle detected for class '" + class_name + "'. Self-referential models must be defined with explicit recursion bounds.")
         idx: int = nox.reflect.class_index(class_name)
         if idx < 0:
             raise ValueError("Class '" + class_name + "' not found in reflection table")
+
+        curr_stack: list[str] = _copy_derivation_stack(stack)
+        curr_stack.append(class_name)
+
         p_count: int = nox.reflect.class_init_param_count(idx)
         k: int = 0
         while k < p_count:
             p_name: str = nox.reflect.class_init_param_name(idx, k)
             p_type: str = nox.reflect.class_init_param_type(idx, k)
+            handled: bool = False
 
             if p_type == "str":
                 self.field_str(p_name)
+                handled = True
             elif p_type == "int":
                 self.field_int(p_name)
+                handled = True
             elif p_type == "float":
                 self.field_float(p_name)
+                handled = True
             elif p_type == "bool":
                 self.field_bool(p_name)
+                handled = True
             elif p_type == "str | None":
                 self.field_str(p_name).optional().nullable()
+                handled = True
             elif p_type == "int | None":
                 self.field_int(p_name).optional().nullable()
+                handled = True
             elif p_type == "float | None":
                 self.field_float(p_name).optional().nullable()
+                handled = True
             elif p_type == "bool | None":
                 self.field_bool(p_name).optional().nullable()
+                handled = True
             elif p_type == "list[str]":
                 self.field_list(p_name, "string")
+                handled = True
             elif p_type == "list[int]":
                 self.field_list(p_name, "int")
+                handled = True
             elif p_type == "list[float]":
                 self.field_list(p_name, "float")
+                handled = True
             elif p_type == "list[bool]":
                 self.field_list(p_name, "bool")
+                handled = True
             else:
                 if len(p_type) > 7 and p_type[len(p_type) - 7:len(p_type)] == " | None":
                     inner_cls_opt: str = p_type[0:len(p_type) - 7]
                     opt_sub_idx: int = nox.reflect.class_index(inner_cls_opt)
                     if opt_sub_idx >= 0:
-                        sub_opt_s: Schema = auto_schema(inner_cls_opt)
+                        sub_opt_s: Schema = auto_schema_internal(inner_cls_opt, curr_stack)
                         self.field_object(p_name, sub_opt_s).optional().nullable()
+                        handled = True
                 else:
                     sub_idx: int = nox.reflect.class_index(p_type)
                     if sub_idx >= 0:
-                        sub_s: Schema = auto_schema(p_type)
+                        sub_s: Schema = auto_schema_internal(p_type, curr_stack)
                         self.field_object(p_name, sub_s)
+                        handled = True
                     elif len(p_type) > 5 and p_type[0:5] == "list[":
                         inner_cls: str = p_type[5:len(p_type) - 1]
                         sub_arr_idx: int = nox.reflect.class_index(inner_cls)
                         if sub_arr_idx >= 0:
-                            sub_arr_s: Schema = auto_schema(inner_cls)
+                            sub_arr_s: Schema = auto_schema_internal(inner_cls, curr_stack)
                             self.field_list_schema(p_name, sub_arr_s)
+                            handled = True
+
+            if not handled:
+                raise ValueError("Unsupported or unrecognized field type '" + p_type + "' for parameter '" + p_name + "' in class '" + class_name + "'")
 
             k = k + 1
         return self
@@ -1524,10 +1569,14 @@ class Schema:
         w.end_object()
         return w.build()
 
-def auto_schema(class_name: str) -> Schema:
+def auto_schema_internal(class_name: str, stack: list[str]) -> Schema:
     s: Schema = Schema(class_name)
-    s.derive_from_class(class_name)
+    s.derive_from_class_internal(class_name, stack)
     return s
+
+def auto_schema(class_name: str) -> Schema:
+    init_stack: list[str] = []
+    return auto_schema_internal(class_name, init_stack)
 
 def schema_from_class(class_name: str) -> Schema:
     return auto_schema(class_name)

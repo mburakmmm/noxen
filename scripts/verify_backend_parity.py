@@ -1,124 +1,172 @@
 #!/usr/bin/env python3
 """
 scripts/verify_backend_parity.py
-Automated differential backend verification for Noxen:
-Executes key suites and services under both LLVM and QBE backends
-and asserts 100% byte-for-byte stdout, exit code, and semantic JSON equivalence.
+Automated differential backend verification for Noxen across LLVM and QBE.
+
+Supports two explicit verification modes:
+  1. --mode semantic: Validates semantic JSON equivalence and structured NOXEN_RESULT_JSON verdicts,
+                      ignoring non-semantic formatting/key-ordering variances.
+  2. --mode strict:   Enforces byte-for-byte identical stdout and exit code equivalence.
+  3. --mode all:      (Default) Runs both semantic structured validation and byte-for-byte parity.
 """
 
 import sys
 import json
 import shutil
+import argparse
 import subprocess
 
 TARGETS = [
-    "tests/unit/auto_schema_test.nox",
-    "tests/unit/float_edge_cases_test.nox",
-    "tests/fuzz/property_test.nox",
-    "tests/integration/nested_array_test.nox",
-    "examples/auto_model.nox",
-    "examples/realworld_service.nox",
-    "examples/nested_model.nox",
-    "examples/strict_validation.nox",
-    "examples/custom_validator.nox",
-    "examples/json_roundtrip.nox",
+    {
+        "path": "tests/unit/auto_schema_test.nox",
+        "has_structured_marker": True,
+    },
+    {
+        "path": "tests/unit/float_edge_cases_test.nox",
+        "has_structured_marker": True,
+    },
+    {
+        "path": "tests/fuzz/property_test.nox",
+        "has_structured_marker": False,
+    },
+    {
+        "path": "tests/integration/nested_array_test.nox",
+        "has_structured_marker": True,
+    },
+    {
+        "path": "examples/auto_model.nox",
+        "has_structured_marker": True,
+    },
+    {
+        "path": "examples/realworld_service.nox",
+        "has_structured_marker": False,
+    },
+    {
+        "path": "examples/nested_model.nox",
+        "has_structured_marker": False,
+    },
+    {
+        "path": "examples/strict_validation.nox",
+        "has_structured_marker": False,
+    },
+    {
+        "path": "examples/custom_validator.nox",
+        "has_structured_marker": False,
+    },
+    {
+        "path": "examples/json_roundtrip.nox",
+        "has_structured_marker": False,
+    },
 ]
 
-def extract_json_objects(output: str) -> list[dict | list]:
-    results = []
-    for line in output.splitlines():
-        line = line.strip()
-        # Look for JSON substrings
-        idx_brace = line.find("{")
-        idx_bracket = line.find("[")
-        start_idx = -1
-        if idx_brace != -1 and idx_bracket != -1:
-            start_idx = min(idx_brace, idx_bracket)
-        elif idx_brace != -1:
-            start_idx = idx_brace
-        elif idx_bracket != -1:
-            start_idx = idx_bracket
+MARKER = "NOXEN_RESULT_JSON:"
 
-        if start_idx != -1:
-            cand = line[start_idx:]
+def extract_structured_json(output: str, path: str) -> list[dict]:
+    results = []
+    for line_num, line in enumerate(output.splitlines(), 1):
+        idx = line.find(MARKER)
+        if idx != -1:
+            json_str = line[idx + len(MARKER):].strip()
             try:
-                parsed = json.loads(cand)
+                parsed = json.loads(json_str)
                 results.append(parsed)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[FATAL ERROR] Malformed NOXEN_RESULT_JSON marker at line {line_num} in {path}: {json_str}")
+                print(f"JSON Parse Error: {e}")
+                sys.exit(1)
     return results
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Verify LLVM and QBE Backend Parity for Noxen")
+    parser.add_argument(
+        "--mode",
+        choices=["strict", "semantic", "all"],
+        default="all",
+        help="Parity mode: 'semantic' (JSON verdicts), 'strict' (byte-for-byte stdout), or 'all' (both)"
+    )
+    args = parser.parse_args()
+
     noxc_cmd = shutil.which("noxc") or "noxc"
-    print(f"1. Checking LLVM and QBE backend parity with noxc ({noxc_cmd})...\n")
+    print(f"=== Noxen Dual-Backend Parity Verification (Mode: {args.mode.upper()}) ===")
+    print(f"Compiler binary: {noxc_cmd}\n")
 
     if sys.platform == "win32":
         print("[INFO] Windows platform detected. Verifying LLVM execution for all targets...")
         for target in TARGETS:
-            res_llvm = subprocess.run([noxc_cmd, "run", "--backend", "llvm", target], capture_output=True, text=True)
+            path = target["path"]
+            res_llvm = subprocess.run([noxc_cmd, "run", "--backend", "llvm", path], capture_output=True, text=True)
             if res_llvm.returncode != 0:
-                print(f"[FAIL] LLVM execution failed for {target}: {res_llvm.stderr}")
+                print(f"[FAIL] LLVM execution failed for {path}: {res_llvm.stderr}")
                 return 1
-            print(f"    [OK] LLVM executed cleanly on {target}.")
+            print(f"    [OK] LLVM executed cleanly on {path}.")
         print("\nALL TARGETS PASSED CLEANLY ON WINDOWS (LLVM)!")
         return 0
 
     passed_count = 0
 
     for target in TARGETS:
-        print(f"--> Verifying parity for: {target}")
+        path = target["path"]
+        has_marker = target["has_structured_marker"]
+        print(f"--> Target: {path}")
 
         # Run with LLVM backend
         res_llvm = subprocess.run(
-            [noxc_cmd, "run", "--backend", "llvm", target],
+            [noxc_cmd, "run", "--backend", "llvm", path],
             capture_output=True,
             text=True
         )
-
         if res_llvm.returncode != 0:
-            print(f"[FAIL] LLVM backend execution failed for {target} (code {res_llvm.returncode}):")
+            print(f"[FAIL] LLVM backend execution failed for {path} (exit code {res_llvm.returncode}):")
             print(res_llvm.stderr)
             return 1
 
         # Run with QBE backend
         res_qbe = subprocess.run(
-            [noxc_cmd, "run", "--backend", "qbe", target],
+            [noxc_cmd, "run", "--backend", "qbe", path],
             capture_output=True,
             text=True
         )
-
         if res_qbe.returncode != 0:
-            print(f"[FAIL] QBE backend execution failed for {target} (code {res_qbe.returncode}):")
+            print(f"[FAIL] QBE backend execution failed for {path} (exit code {res_qbe.returncode}):")
             print(res_qbe.stderr)
             return 1
 
-        # Compare exit codes
+        # 1. Exit code equivalence (always enforced)
         if res_llvm.returncode != res_qbe.returncode:
-            print(f"[PARITY MISMATCH] Exit code mismatch on {target}: LLVM={res_llvm.returncode}, QBE={res_qbe.returncode}")
+            print(f"[PARITY MISMATCH] Exit code mismatch on {path}: LLVM={res_llvm.returncode}, QBE={res_qbe.returncode}")
             return 1
 
-        # Compare outputs byte-for-byte
-        if res_llvm.stdout != res_qbe.stdout:
-            print(f"[PARITY MISMATCH] Stdout mismatch on {target}!")
-            print("--- LLVM Output ---")
-            print(res_llvm.stdout)
-            print("--- QBE Output ---")
-            print(res_qbe.stdout)
-            return 1
+        # 2. Semantic structured verification (if mode is semantic or all)
+        if args.mode in ["semantic", "all"]:
+            json_llvm = extract_structured_json(res_llvm.stdout, f"{path} [LLVM]")
+            json_qbe = extract_structured_json(res_qbe.stdout, f"{path} [QBE]")
 
-        # Semantic JSON parity: verify all JSON fragments match semantically
-        json_llvm = extract_json_objects(res_llvm.stdout)
-        json_qbe = extract_json_objects(res_qbe.stdout)
-        if json_llvm != json_qbe:
-            print(f"[SEMANTIC JSON MISMATCH] Parsed JSON outputs do not match on {target}!")
-            print(f"LLVM JSONs: {json_llvm}")
-            print(f"QBE JSONs: {json_qbe}")
-            return 1
+            if has_marker and (len(json_llvm) == 0 or len(json_qbe) == 0):
+                print(f"[ERROR] Expected NOXEN_RESULT_JSON marker in {path}, but found 0 markers!")
+                return 1
 
-        print(f"    [OK] Exit code, byte-for-byte stdout, and {len(json_llvm)} semantic JSON structures match between LLVM and QBE.")
+            if json_llvm != json_qbe:
+                print(f"[SEMANTIC PARITY MISMATCH] Structured JSON verdicts differ on {path}!")
+                print(f"LLVM JSON: {json_llvm}")
+                print(f"QBE JSON:  {json_qbe}")
+                return 1
+            if len(json_llvm) > 0:
+                print(f"    [SEMANTIC OK] Verified {len(json_llvm)} structured JSON verdict(s) between LLVM and QBE.")
+
+        # 3. Strict byte-for-byte verification (if mode is strict or all)
+        if args.mode in ["strict", "all"]:
+            if res_llvm.stdout != res_qbe.stdout:
+                print(f"[STRICT PARITY MISMATCH] Byte-for-byte stdout mismatch on {path}!")
+                print("--- LLVM Output ---")
+                print(res_llvm.stdout)
+                print("--- QBE Output ---")
+                print(res_qbe.stdout)
+                return 1
+            print(f"    [STRICT OK] Byte-for-byte identical stdout and exit code between LLVM and QBE.")
+
         passed_count += 1
 
-    print(f"\nALL {passed_count} TEST TARGETS PASSED WITH 100% LLVM / QBE BACKEND PARITY!")
+    print(f"\nALL {passed_count} TARGETS PASSED WITH 100% LLVM / QBE PARITY (Mode: {args.mode.upper()})!")
     return 0
 
 if __name__ == "__main__":

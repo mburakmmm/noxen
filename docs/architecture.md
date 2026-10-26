@@ -113,6 +113,13 @@ Dependency flow is strictly unidirectional with no circular dependencies.
 - `Result[T].unwrap() -> T`:
   - Returns the model if valid; raises `ValidationError` if validation failed.
 
+### 3.6 Automatic Schema Derivation Architecture (`schema.nox: auto_schema`)
+- **Reflection Inspection**: Inspects user class `__init__` constructor parameter names and types at initialization via `nox.reflect`.
+- **Recursive Derivation**: Automatically recurses into nested classes (`field_object`) and arrays of classes (`field_list_schema`).
+- **Cycle & Recursion Protection**: Tracks derivation call stacks to detect self-referential or mutually cyclic models (e.g. `Category` containing `Category | None`), raising `ValueError` and preventing stack exhaustion.
+- **Strict Type Validation**: Every parameter type must resolve to a known Noxen mapping; unrecognized types raise `ValueError` immediately to prevent silent data omission.
+- **Ahead-of-Time Boundary**: Because Nox is compiled ahead-of-time to native machine code without runtime `eval` or dynamic object instantiation, model construction (`(ValidatedData) -> T`) remains an explicit compiled closure, guaranteeing 100% static type safety and zero runtime reflection overhead during request processing.
+
 ## 4. Framework-Independent Adapter Architecture
 
 In strict conformance with AGENTS.md §0 and §2:

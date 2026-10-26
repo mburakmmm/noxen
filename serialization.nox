@@ -50,6 +50,9 @@ class Serializer:
 
     def float(self: Serializer, k: str, v: float) -> None:
         self._record_key(k)
+        s_val: str = str(v)
+        if s_val == "nan" or s_val == "inf" or s_val == "-inf":
+            raise ValueError("Cannot serialize non-finite float (" + s_val + ") for key '" + k + "' to JSON")
         self._w.write_key(k)
         self._w.write_float(v)
 
@@ -85,6 +88,9 @@ class Serializer:
         if v is None:
             self._w.write_null()
         else:
+            s_val: str = str(v)
+            if s_val == "nan" or s_val == "inf" or s_val == "-inf":
+                raise ValueError("Cannot serialize non-finite float (" + s_val + ") for key '" + k + "' to JSON")
             self._w.write_float(v)
 
     def opt_bool(self: Serializer, k: str, v: bool | None) -> None:
@@ -121,6 +127,9 @@ class Serializer:
         self._w.begin_array()
         i: int = 0
         while i < len(items):
+            s_val: str = str(items[i])
+            if s_val == "nan" or s_val == "inf" or s_val == "-inf":
+                raise ValueError("Cannot serialize non-finite float (" + s_val + ") in array for key '" + k + "' to JSON")
             self._w.write_float(items[i])
             i = i + 1
         self._w.end_array()

@@ -5,6 +5,27 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-10-26
+
+### Added
+- **Non-Finite Float Serialization Rejection**:
+  - `Serializer.float`, `Serializer.opt_float`, `Serializer.list_float`, and `Schema.dump` now strictly check for non-finite values (`NaN`, `Infinity`, `-Infinity`) and raise `ValueError`, preventing generation of malformed JSON.
+  - Added test cases to `tests/unit/float_edge_cases_test.nox` verifying rejection across all serialization paths.
+- **Exact IEEE 754 Negative Zero (`-0.0`) Sign Preservation**:
+  - Added mathematical IEEE 754 sign verification (`1.0 / -0.0 == -inf`, `1.0 / 0.0 == inf`) to prove exact sign preservation without relying solely on approximate equality.
+- **Recursive Model Cycle Detection in `auto_schema`**:
+  - Implemented derivation call stack tracking to detect self-referential or cyclic models (e.g. `Category` containing `Category | None`), raising an immediate descriptive `ValueError` and eliminating infinite recursion.
+- **Strict Unsupported Parameter Type Rejection**:
+  - `auto_schema` now validates every parameter type against supported Nox types; unrecognized or unmappable types raise `ValueError` immediately, preventing silent data omission.
+- **Dual-Mode Backend Parity Verification (`scripts/verify_backend_parity.py`)**:
+  - Added CLI flag `--mode`:
+    - `--mode semantic`: Validates structured `NOXEN_RESULT_JSON` markers and semantic JSON equivalence (with zero silent exception suppression).
+    - `--mode strict`: Enforces byte-for-byte stdout and exit code equivalence.
+    - `--mode all`: (Default) Executes both semantic structured validation and strict byte-for-byte verification.
+  - Added `NOXEN_RESULT_JSON` markers to `nested_array_test.nox`, `auto_model.nox`, `auto_schema_test.nox`, and `float_edge_cases_test.nox`.
+- **Architectural Clarity & Model Mapping Documentation**:
+  - Clarified the distinction between automatic schema derivation and explicit type-safe model mapping in `README.md`, `docs/architecture.md`, and `docs/api.md`, documenting the language invariants of ahead-of-time compiled Nox.
+
 ## [0.7.0] - 2026-10-26
 
 ### Added

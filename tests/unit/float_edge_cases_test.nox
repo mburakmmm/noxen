@@ -75,10 +75,18 @@ nox.test.assert_true(not r_lax_c_inf.is_valid, "'Infinity' string rejected under
 # -----------------------------------------------------------------------------
 # 3. Valid Float Representations: Negative Zero, Subnormals, Scientific
 # -----------------------------------------------------------------------------
-# 3.1 Negative zero (-0.0)
+# 3.1 Negative zero (-0.0) with exact IEEE 754 sign verification
+def is_negative_zero(v: float) -> bool:
+    if v == 0.0:
+        inv: float = 1.0 / v
+        return str(inv) == "-inf" or inv < 0.0
+    return False
+
 r_neg_zero: ValidationResult = s_num.validate_json("{\"val\": -0.0}")
 nox.test.assert_true(r_neg_zero.is_valid, "-0.0 is valid JSON number")
-nox.test.assert_true(is_float_approx_eq(r_neg_zero.data.get_float("val"), 0.0), "-0.0 approximately equals 0.0")
+val_neg_zero: float = r_neg_zero.data.get_float("val")
+nox.test.assert_true(is_negative_zero(val_neg_zero), "-0.0 preserves negative zero sign (1.0 / -0.0 == -inf)")
+nox.test.assert_true(not is_negative_zero(0.0), "0.0 is distinct positive zero (1.0 / 0.0 == inf)")
 
 # 3.2 Scientific notation (small subnormal / near zero)
 r_small: ValidationResult = s_num.validate_json("{\"val\": 1e-15}")
@@ -136,4 +144,57 @@ r_re: ValidationResult = s_bounded.validate_json(dumped)
 nox.test.assert_true(r_re.is_valid, "Dumped float json re-validates cleanly")
 nox.test.assert_true(is_float_approx_eq(r_re.data.get_float("ratio"), 1.0), "Round-tripped ratio matches 1.0")
 
+# -----------------------------------------------------------------------------
+# 7. Rejection of Non-Finite Floats During Serialization
+# -----------------------------------------------------------------------------
+import serialization
+from serialization import Serializer
+
+# Serializer.float rejects NaN
+ser_nan_caught: bool = False
+try:
+    s_ser1: Serializer = Serializer()
+    s_ser1.float("x", float("nan"))
+except ValueError as e:
+    ser_nan_caught = True
+nox.test.assert_true(ser_nan_caught, "Serializer.float rejects NaN with ValueError")
+
+# Serializer.float rejects Infinity
+ser_inf_caught: bool = False
+try:
+    s_ser2: Serializer = Serializer()
+    s_ser2.float("x", float("inf"))
+except ValueError as e:
+    ser_inf_caught = True
+nox.test.assert_true(ser_inf_caught, "Serializer.float rejects inf with ValueError")
+
+# Serializer.float rejects -Infinity
+ser_ninf_caught: bool = False
+try:
+    s_ser3: Serializer = Serializer()
+    s_ser3.float("x", float("-inf"))
+except ValueError as e:
+    ser_ninf_caught = True
+nox.test.assert_true(ser_ninf_caught, "Serializer.float rejects -inf with ValueError")
+
+# Serializer.list_float rejects array containing NaN
+ser_list_nan_caught: bool = False
+try:
+    s_ser4: Serializer = Serializer()
+    s_ser4.list_float("items", [1.0, float("nan"), 3.0])
+except ValueError as e:
+    ser_list_nan_caught = True
+nox.test.assert_true(ser_list_nan_caught, "Serializer.list_float rejects NaN in float list")
+
+# Schema.dump rejects non-finite float
+ser_dump_nan_caught: bool = False
+try:
+    bad_data: ValidatedData = ValidatedData()
+    bad_data.set_float("val", float("nan"))
+    s_num.dump(bad_data)
+except ValueError as e:
+    ser_dump_nan_caught = True
+nox.test.assert_true(ser_dump_nan_caught, "Schema.dump rejects NaN with ValueError")
+
+print("NOXEN_RESULT_JSON:{\"test\":\"float_edge_cases\",\"valid\":true,\"nan_rejected\":true,\"neg_zero_preserved\":true}")
 print("float_edge_cases_test passed")

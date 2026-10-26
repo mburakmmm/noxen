@@ -11,9 +11,9 @@
 
 **Statically typed data modeling, parsing, validation, and high-performance serialization for the [Nox programming language](https://noxlang.com).**
 
-*The idiomatic, statically typed Pydantic counterpart for the Nox ecosystem with zero-boilerplate automatic model derivation (`auto_schema`), JSON Schema Draft 2020-12 compliance, and Aether / Nyx adapters.*
+*The idiomatic, statically typed Pydantic counterpart for the Nox ecosystem with automatic schema derivation (`auto_schema`), JSON Schema Draft 2020-12 compliance, and Aether / Nyx adapters.*
 
-[Quick Start](#quickstart) • [Features](#highlights) • [Benchmarks](#benchmarks) • [Real-World Architecture](#real-world-service-architecture) • [Documentation](#documentation--license) • [Releases](https://github.com/mburakmmm/noxen/releases)
+[Quick Start](#quickstart) • [Features](#highlights) • [Model Mapping Architecture](#design-boundary-automatic-schema-vs-explicit-model-mapping) • [Benchmarks](#benchmarks) • [Real-World Architecture](#real-world-service-architecture) • [Documentation](#documentation--license) • [Releases](https://github.com/mburakmmm/noxen/releases)
 
 </div>
 
@@ -21,7 +21,7 @@
 
 ## Overview
 
-**Noxen** brings the useful core of Pydantic to the Nox ecosystem — designed from the ground up as an idiomatic, ahead-of-time compiled, statically typed library with zero-boilerplate automatic model derivation via `nox.reflect`, strict static typing, and high-performance serialization.
+**Noxen** brings the useful core of Pydantic to the Nox ecosystem — designed from the ground up as an idiomatic, ahead-of-time compiled, statically typed library with automatic schema derivation via `nox.reflect`, strict static typing, and high-performance serialization.
 
 ```text
        JSON String / Database Row / HTTP Body
@@ -50,9 +50,10 @@
 
 ### Highlights
 
-* **Automatic Schema Derivation (`auto_schema`)**: Zero-boilerplate schema construction using Nox's standard library reflection (`nox.reflect`). Incurs zero manual field declarations while recursively resolving nested classes, nullable optionals (`T | None`), and lists (`list[T]`).
-* **Statically Typed Models**: Bind incoming JSON directly into strongly typed Nox classes with compile-time safety via monomorphised generic `ModelSchema[T]`.
+* **Automatic Schema Derivation (`auto_schema`)**: Construct schemas automatically from class declarations using Nox's standard library reflection (`nox.reflect`). Recursively resolves nested classes, nullable optionals (`T | None`), and lists (`list[T]`), with built-in recursive cycle protection and strict unsupported type rejection.
+* **Statically Typed Models**: Bind incoming JSON directly into strongly typed Nox classes with compile-time safety via monomorphised generic `ModelSchema[T]` and explicit, type-safe factory closures.
 * **Strict by Default**: Extra fields are rejected by default (`POLICY_FORBID`), and implicit type coercions are disallowed in strict mode.
+* **Non-Finite Float Rejection**: Strict RFC 8259 compliance rejecting `NaN`, `Infinity`, and `-Infinity` across both JSON parsing and serializer dump paths (`Serializer.float` raises `ValueError`). Preserves exact IEEE 754 negative zero (`-0.0`) signs.
 * **O(1) Serializer Key Collision Protection**: `Serializer` tracks written property keys using a hash set, ensuring $O(N)$ total complexity and preventing duplicate JSON keys.
 * **Output Re-validation**: Separate high-speed direct dump path (1.25M ops/sec) from verified output re-validation (`dump_validated()`) with IEEE 754 precision boundary checks.
 * **Nested Models & Multi-Level Arrays**: Validate deeply nested objects and array hierarchies (`Company -> employees[] -> addresses[]`) with pinpoint dot-and-index error paths (`employees[1].addresses[0].city`).
@@ -65,7 +66,7 @@
 * **JSON Serialization**: High-performance serialization from typed model instances back to JSON with `Serializer`.
 * **JSON Schema Generation**: Export schemas directly to standard JSON Schema Draft 2020-12 specifications with 100% agreement across currently implemented differential test scenarios against Python's official Draft 2020-12 validator.
 * **Native Aether & Nyx Adapters**: Ready-to-use HTTP response generators (`json_422`, `json_200`, `json_201`) and database row hydration (`DbAdapter[T]`, `row_to_validated_data`).
-* **Dual-Backend Parity (LLVM & QBE)**: Fully tested and verified across both compiler code generation backends with byte-for-byte output equivalence.
+* **Dual-Backend Parity (LLVM & QBE)**: Automated verification script with dedicated `--mode semantic` (structured `NOXEN_RESULT_JSON` validation) and `--mode strict` (byte-for-byte stdout equivalence).
 
 ---
 
@@ -176,6 +177,27 @@ if res.is_ok:
 else:
     print("Validation failed:", res.errors[0].message)
 ```
+
+---
+
+## Design Boundary: Automatic Schema Derivation vs. Explicit Model Mapping
+
+Noxen makes an explicit, intentional distinction between **Schema Derivation** and **Model Mapping**:
+
+| Operation | Mechanism in Noxen | Description |
+|---|---|---|
+| **Class → Schema** | **Automatic (`auto_schema`)** | Reads class constructor parameters via standard library `nox.reflect`, deriving fields, types, nullables, lists, and nested objects with 0 manual declarations. |
+| **JSON → Class** | **Explicit Type-Safe Factory (`make_user`)** | A compiled closure `(ValidatedData) -> T` constructing the concrete class instance from validated fields. |
+| **Class → JSON** | **Explicit Type-Safe Unparser (`unparse_user`)** | A compiled closure `(T) -> ValidatedData` populating validated fields for serialization. |
+
+### Why Model Factories & Unparsers Are Explicit in Nox
+
+In dynamic interpreted languages (like Python/Pydantic), libraries use runtime `getattr`, `setattr`, metaclasses, and dynamic bytecode generation.
+
+In contrast, **Nox is a statically typed, ahead-of-time compiled language** (compiled directly to native machine code via LLVM or QBE). In accordance with the binding **AGENTS.md** invariants:
+1. **Static Typing & Predictable Memory**: Objects are instantiated via real, typed constructor calls with zero dynamic casting or fake `Any`.
+2. **Zero Runtime Reflection Overhead**: Reflection is used strictly to infer schema constraints at initialization time; parsing and serializing millions of requests in production executes via optimized, monomorphised native code without reflection lookups.
+3. **Ergonomic Convenience**: `ValidatedData` provides fluent helpers (`set_opt_str`, `get_opt_int`, `set_object`, `get_list_str`) to make writing factories and unparsers trivial and declarative.
 
 ---
 

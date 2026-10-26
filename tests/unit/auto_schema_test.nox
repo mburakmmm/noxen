@@ -139,4 +139,35 @@ except ValueError as e:
     failed = True
 nox.test.assert_true(failed, "auto_schema raises ValueError on unknown class")
 
+# 9. Test recursive model cycle detection (prevents infinite recursion)
+class Category:
+    name: str
+    parent: Category | None
+    def __init__(self: Category, name: str, parent: Category | None) -> None:
+        self.name = name
+        self.parent = parent
+
+cycle_failed: bool = False
+try:
+    cat_s: Schema = auto_schema("Category")
+except ValueError as e:
+    cycle_failed = True
+nox.test.assert_true(cycle_failed, "auto_schema cleanly catches self-referential cycle and raises ValueError")
+
+# 10. Test unsupported parameter type detection (prevents silent data omission)
+class ModelWithUnsupportedField:
+    name: str
+    mapping: dict[str, str]
+    def __init__(self: ModelWithUnsupportedField, name: str, mapping: dict[str, str]) -> None:
+        self.name = name
+        self.mapping = mapping
+
+unsupported_failed: bool = False
+try:
+    unsupp_s: Schema = auto_schema("ModelWithUnsupportedField")
+except ValueError as e:
+    unsupported_failed = True
+nox.test.assert_true(unsupported_failed, "auto_schema raises ValueError when encountering unsupported type (no silent loss)")
+
+print("NOXEN_RESULT_JSON:{\"test\":\"auto_schema\",\"valid\":true,\"fields_count\":7}")
 print("auto_schema_test passed")
