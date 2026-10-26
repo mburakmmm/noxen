@@ -2,7 +2,7 @@
 
 > **Statically typed data modeling, parsing, validation, and serialization for the Nox programming language.**
 >
-> Maturity status: **v0.5.0 — High-Throughput O(1) Serialization, Verified Boundaries & Ecosystem Release**. Verified against `noxc 2.0.27+`.
+> Maturity status: **v0.5.1 — Parametrized SQL, Hardened Testing & Benchmark Precision Release**. Verified against `noxc 2.0.27+`.
 
 ---
 
@@ -49,7 +49,7 @@ Add Noxen to your project's `nox.json`:
     {
       "alias": "noxen",
       "repo": "github.com/mburakmmm/noxen",
-      "ref": "v0.5.0"
+      "ref": "v0.5.1"
     }
   ]
 }

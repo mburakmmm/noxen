@@ -73,8 +73,11 @@ while i < len(books):
     print("#" + str(b.id) + ": \"" + b.title + "\" by " + b.author + " (" + str(b.pages) + "p, " + str(b.rating) + "/5.0) - " + status)
     i = i + 1
 
-# 6. Single Record Query
-row_single: list[Row] = conn.query("SELECT id, title, author, pages, rating, available FROM books WHERE id = 1")
+# 6. Single Record Query with Parametrized Statement
+from nox.db import Statement
+stmt: Statement = conn.prepare("SELECT id, title, author, pages, rating, available FROM books WHERE id = ?")
+stmt.bind_int(0, 1)
+row_single: list[Row] = stmt.query()
 first_book: Book = adapter.parse_row(row_single[0])
 
 # 7. Serialize Single Record to JSON

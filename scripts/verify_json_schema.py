@@ -54,15 +54,32 @@ def main():
     cases_block = output[c_start_idx + len(c_start_tag):c_end_idx].strip()
     lines = [line.strip() for line in cases_block.splitlines() if line.strip()]
 
-    if len(lines) < 14:
-        print(f"FATAL ERROR: Expected at least 14 differential test scenarios, but found {len(lines)}")
+    EXPECTED_SCENARIOS = {
+        "valid_full",
+        "valid_null_website",
+        "valid_omit_website",
+        "reject_null_username",
+        "reject_missing_username",
+        "reject_min_id",
+        "reject_max_id",
+        "reject_min_items",
+        "reject_tax_id_pattern",
+        "reject_nested_street_length",
+        "reject_additional_property",
+        "reject_role_choice",
+        "reject_score_min",
+        "reject_score_max",
+    }
+
+    if len(lines) < len(EXPECTED_SCENARIOS):
+        print(f"FATAL ERROR: Expected at least {len(EXPECTED_SCENARIOS)} differential test scenarios, but found {len(lines)}")
         sys.exit(1)
 
     print(f"\n3. Running Differential Testing across {len(lines)} test scenarios...")
     print("   Comparing Noxen validation results against Python Draft202012Validator:")
 
     mismatch_count = 0
-    executed_count = 0
+    executed_scenarios = set()
     for line_idx, line in enumerate(lines, 1):
         parts = line.split(":::")
         if len(parts) != 3:
@@ -70,6 +87,20 @@ def main():
             sys.exit(1)
 
         case_name, noxen_verdict, payload_str = parts
+
+        # Validate case name uniqueness and expectation
+        if case_name in executed_scenarios:
+            print(f"FATAL ERROR: Duplicate differential scenario '{case_name}' encountered at line #{line_idx}")
+            sys.exit(1)
+        if case_name not in EXPECTED_SCENARIOS:
+            print(f"FATAL ERROR: Unexpected differential scenario '{case_name}' encountered at line #{line_idx}")
+            sys.exit(1)
+
+        # Validate noxen_verdict syntax
+        if noxen_verdict not in ("VALID", "REJECTED"):
+            print(f"FATAL ERROR: Unknown noxen_verdict '{noxen_verdict}' in scenario '{case_name}' (expected 'VALID' or 'REJECTED')")
+            sys.exit(1)
+
         try:
             payload = json.loads(payload_str)
         except json.JSONDecodeError as e:
@@ -84,13 +115,18 @@ def main():
             mismatch_count += 1
         else:
             print(f"   [DIFFERENTIAL OK] Case '{case_name}': Both agreed on {py_verdict}")
-        executed_count += 1
+        executed_scenarios.add(case_name)
+
+    missing_scenarios = EXPECTED_SCENARIOS - executed_scenarios
+    if missing_scenarios:
+        print(f"FATAL ERROR: Missing required differential scenario(s): {missing_scenarios}")
+        sys.exit(1)
 
     if mismatch_count > 0:
         print(f"\nFAILED: {mismatch_count} differential testing mismatches found!")
         sys.exit(1)
 
-    print(f"\nALL {executed_count} DIFFERENTIAL TEST SCENARIOS PASSED WITH 100% AGREEMENT!")
+    print(f"\nALL {len(executed_scenarios)} EXPECTED DIFFERENTIAL TEST SCENARIOS PASSED WITH 100% AGREEMENT!")
     print("Noxen runtime validation and emitted JSON Schema Draft 2020-12 agree 100% across all evaluated scenarios.")
 
 if __name__ == "__main__":

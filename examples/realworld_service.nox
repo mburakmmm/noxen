@@ -8,7 +8,7 @@ from nox.http import HttpRequest, HttpResponse
 import nox.sqlite
 from nox.sqlite import Connection
 import nox.db
-from nox.db import Row
+from nox.db import Row, Statement
 import noxen
 import models
 import db_adapter
@@ -110,13 +110,21 @@ class ProductService:
         stock_int: int = 0
         if in_stock:
             stock_int = 1
-        sql: str = "INSERT INTO products VALUES (" + str(pid) + ", '" + sku + "', '" + name + "', " + str(price_cents) + ", " + str(stock_int) + ")"
-        self.conn.execute(sql)
+        # Parametrized SQL statement prevents SQL injection and safely handles apostrophes / quotes
+        stmt: Statement = self.conn.prepare("INSERT INTO products VALUES (?, ?, ?, ?, ?)")
+        stmt.bind_int(0, pid)
+        stmt.bind_str(1, sku)
+        stmt.bind_str(2, name)
+        stmt.bind_int(3, price_cents)
+        stmt.bind_int(4, stock_int)
+        stmt.execute()
         return Product(pid, sku, name, price_cents, in_stock)
 
     def find_by_id(self, pid: int) -> Product | None:
-        sql: str = "SELECT id, sku, name, price_cents, in_stock FROM products WHERE id = " + str(pid)
-        rows: list[Row] = self.conn.query(sql)
+        # Parametrized SQL query for safe entity retrieval
+        stmt: Statement = self.conn.prepare("SELECT id, sku, name, price_cents, in_stock FROM products WHERE id = ?")
+        stmt.bind_int(0, pid)
+        rows: list[Row] = stmt.query()
         if len(rows) == 0:
             return None
         # Hydrate and validate database row into typed domain entity
@@ -195,5 +203,19 @@ print("HTTP Status:", get2_resp.status)
 print("Persisted Product JSON:", get2_resp.body)
 nox.test.assert_eq_int(200, get2_resp.status, "GET 2 returns HTTP 200")
 nox.test.assert_true(nox.strings.contains(get2_resp.body, "UltraWide 4K Monitor"), "Persisted product matches")
+
+# Scenario E: SQL Injection & Special Character Safety (Parametrized Queries)
+print("\n[Scenario 5] POST /api/products (Special Characters & Single Quotes in Name)")
+quote_json: str = "{\"sku\":\"MAT-PRO-01\",\"name\":\"Developer's Precision Desk Mat\",\"price_cents\":3500,\"in_stock\":true}"
+quote_req: HttpRequest = HttpRequest("POST", "/api/products", quote_json, {}, "127.0.0.1")
+quote_resp: HttpResponse = handle_create_product(quote_req)
+print("HTTP Status:", quote_resp.status)
+print("Created Product JSON:", quote_resp.body)
+nox.test.assert_eq_int(201, quote_resp.status, "POST product with apostrophe returns HTTP 201")
+
+# Verify entity retrieved with intact single quote from database
+get3_resp: HttpResponse = handle_get_product(3)
+nox.test.assert_eq_int(200, get3_resp.status, "GET 3 returns HTTP 200")
+nox.test.assert_true(nox.strings.contains(get3_resp.body, "Developer's Precision Desk Mat"), "Product with apostrophe stored and retrieved safely")
 
 print("\nAll Real-World Service scenarios executed and verified successfully!")

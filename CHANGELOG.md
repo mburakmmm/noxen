@@ -5,6 +5,26 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-10-26
+
+### Added
+- **Parametrized SQL Queries in Service Architectures**:
+  - Refactored `ProductService` in `examples/realworld_service.nox` and single record queries in `examples/nyx_crud.nox` to use native `nox.db.Statement` with parametrized `?` binding (`stmt.bind_int`, `stmt.bind_str`).
+  - Completely eliminates SQL string concatenation, securing the service layer against SQL injection and guaranteeing safe handling of quotes and apostrophes in text fields (e.g. `"Developer's Precision Desk Mat"`).
+  - Added Scenario 5 to `examples/realworld_service.nox` verifying end-to-end insertion, database persistence, and retrieval of records containing special characters and single quotes.
+- **Robust Differential Testing Scenario Set Verification**:
+  - Upgraded `scripts/verify_json_schema.py` to compare executed scenario names against an explicit `EXPECTED_SCENARIOS` set.
+  - Aborts immediately on duplicate scenarios, unexpected scenario names, missing required scenarios, or invalid `noxen_verdict` values.
+- **Upgraded Benchmark Methodology**:
+  - Integrated 500-iteration warmup phases into `benchmarks/run_benchmarks.nox` to prime instruction caches and runtime branches.
+  - Implemented 3-trial execution with median measurement (`median3`) to filter out operating system scheduling jitter.
+  - Added checksum accumulators across all benchmark outputs to prevent dead code elimination.
+
+### Changed
+- **Serializer Memory Layout Optimization**:
+  - Removed the redundant `_written_keys: list[str]` array from `Serializer`.
+  - Serializer key collision tracking is now exclusively powered by `_written_map: dict[str, bool]`, eliminating redundant list allocations and reducing memory overhead on every serialized key.
+
 ## [0.5.0] - 2026-10-26
 
 ### Added
