@@ -1,5 +1,6 @@
 # schema.nox — Declarative schema definition, validation engine, and JSON Schema generation.
 
+import nox.reflect
 import errors
 from errors import FieldError, CODE_INVALID_JSON, CODE_EXPECTED_OBJECT, CODE_MISSING_FIELD, CODE_UNEXPECTED_NULL, CODE_TYPE_MISMATCH, CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE, CODE_STRING_TOO_SHORT, CODE_STRING_TOO_LONG, CODE_INVALID_EMAIL, CODE_INVALID_URL, CODE_INVALID_UUID, CODE_INVALID_DATE, CODE_INVALID_TIME, CODE_INVALID_DATETIME, CODE_PATTERN_MISMATCH, CODE_CHOICE_MISMATCH, CODE_ARRAY_TOO_SHORT, CODE_ARRAY_TOO_LONG, CODE_RECURSION_LIMIT, CODE_MAX_ERRORS_EXCEEDED
 import validators
@@ -64,8 +65,16 @@ def _try_coerce_int(s: str) -> int | None:
 def _try_coerce_float(s: str) -> float | None:
     if len(s) == 0:
         return None
+    if s == "nan" or s == "NaN" or s == "NAN":
+        return None
+    if s == "inf" or s == "-inf" or s == "+inf" or s == "Infinity" or s == "-Infinity" or s == "+Infinity":
+        return None
     try:
-        return float(s)
+        val: float = float(s)
+        s_val: str = str(val)
+        if s_val == "nan" or s_val == "inf" or s_val == "-inf":
+            return None
+        return val
     except ValueError as e:
         return None
 
@@ -175,6 +184,15 @@ class Field:
         elif self.mode == MODE_OPTIONAL:
             self.mode = MODE_OPTIONAL_NULLABLE
         return self
+
+    def is_nullable(self: Field) -> bool:
+        return self.mode == MODE_REQUIRED_NULLABLE or self.mode == MODE_OPTIONAL_NULLABLE
+
+    def is_optional(self: Field) -> bool:
+        return self.mode == MODE_OPTIONAL or self.mode == MODE_OPTIONAL_NULLABLE
+
+    def is_required(self: Field) -> bool:
+        return self.mode == MODE_REQUIRED or self.mode == MODE_REQUIRED_NULLABLE
 
     def default_s(self: Field, v: str) -> Field:
         self.has_default = True
@@ -408,6 +426,71 @@ class Schema:
                 return f
             i = i + 1
         return None
+
+    def field(self: Schema, name: str) -> Field | None:
+        return self.get_field(name)
+
+    def require_field(self: Schema, name: str) -> Field:
+        f: Field | None = self.get_field(name)
+        if f != None:
+            return f
+        raise ValueError("Field '" + name + "' not found in schema '" + self.name + "'")
+
+    def derive_from_class(self: Schema, class_name: str) -> Schema:
+        idx: int = nox.reflect.class_index(class_name)
+        if idx < 0:
+            raise ValueError("Class '" + class_name + "' not found in reflection table")
+        p_count: int = nox.reflect.class_init_param_count(idx)
+        k: int = 0
+        while k < p_count:
+            p_name: str = nox.reflect.class_init_param_name(idx, k)
+            p_type: str = nox.reflect.class_init_param_type(idx, k)
+
+            if p_type == "str":
+                self.field_str(p_name)
+            elif p_type == "int":
+                self.field_int(p_name)
+            elif p_type == "float":
+                self.field_float(p_name)
+            elif p_type == "bool":
+                self.field_bool(p_name)
+            elif p_type == "str | None":
+                self.field_str(p_name).optional().nullable()
+            elif p_type == "int | None":
+                self.field_int(p_name).optional().nullable()
+            elif p_type == "float | None":
+                self.field_float(p_name).optional().nullable()
+            elif p_type == "bool | None":
+                self.field_bool(p_name).optional().nullable()
+            elif p_type == "list[str]":
+                self.field_list(p_name, "string")
+            elif p_type == "list[int]":
+                self.field_list(p_name, "int")
+            elif p_type == "list[float]":
+                self.field_list(p_name, "float")
+            elif p_type == "list[bool]":
+                self.field_list(p_name, "bool")
+            else:
+                if len(p_type) > 7 and p_type[len(p_type) - 7:len(p_type)] == " | None":
+                    inner_cls_opt: str = p_type[0:len(p_type) - 7]
+                    opt_sub_idx: int = nox.reflect.class_index(inner_cls_opt)
+                    if opt_sub_idx >= 0:
+                        sub_opt_s: Schema = auto_schema(inner_cls_opt)
+                        self.field_object(p_name, sub_opt_s).optional().nullable()
+                else:
+                    sub_idx: int = nox.reflect.class_index(p_type)
+                    if sub_idx >= 0:
+                        sub_s: Schema = auto_schema(p_type)
+                        self.field_object(p_name, sub_s)
+                    elif len(p_type) > 5 and p_type[0:5] == "list[":
+                        inner_cls: str = p_type[5:len(p_type) - 1]
+                        sub_arr_idx: int = nox.reflect.class_index(inner_cls)
+                        if sub_arr_idx >= 0:
+                            sub_arr_s: Schema = auto_schema(inner_cls)
+                            self.field_list_schema(p_name, sub_arr_s)
+
+            k = k + 1
+        return self
 
     def validate_at(self: Schema, v: JsonValue, prefix: str, depth: int) -> ValidationResult:
         data: ValidatedData = ValidatedData()
@@ -643,7 +726,10 @@ class Schema:
                     elif field.kind == "float":
                         fv_opt: float | None = None
                         if nox.json.is_number(field_val):
-                            fv_opt = nox.json.as_number(field_val)
+                            raw_f: float = nox.json.as_number(field_val)
+                            s_num: str = str(raw_f)
+                            if s_num != "nan" and s_num != "inf" and s_num != "-inf":
+                                fv_opt = raw_f
                         elif self.coercion == COERCION_LAX and nox.json.is_string(field_val):
                             fv_opt = _try_coerce_float(nox.json.as_string(field_val))
 
@@ -1437,3 +1523,11 @@ class Schema:
 
         w.end_object()
         return w.build()
+
+def auto_schema(class_name: str) -> Schema:
+    s: Schema = Schema(class_name)
+    s.derive_from_class(class_name)
+    return s
+
+def schema_from_class(class_name: str) -> Schema:
+    return auto_schema(class_name)

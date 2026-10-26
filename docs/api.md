@@ -25,10 +25,22 @@ This document provides a complete reference for all public classes, functions, m
 
 ## 2. Core Classes
 
+### `auto_schema(class_name: str) -> Schema` & `schema_from_class(class_name: str) -> Schema`
+Top-level constructors that automatically inspect a domain class signature via standard library `nox.reflect` and derive a complete `Schema` with 0 manual field declarations.
+* Inspects `__init__` parameter names and type signatures.
+* Maps `str`, `int`, `float`, `bool` directly to typed fields.
+* Maps `T | None` optionals to `.optional().nullable()`.
+* Maps `list[str]`, `list[int]`, `list[float]`, `list[bool]` to primitive arrays.
+* Recursively derives schemas for nested classes (`field_object`) and arrays of classes (`field_list_schema`).
+* Raises `ValueError` if the specified class name is not found in the compilation reflection index.
+
 ### `Schema` (`schema.nox`)
 The root validation engine for structured data.
 
 * `Schema(name: str)`: Initializes a new schema.
+* `derive_from_class(class_name: str) -> Schema`: Fluent method populating schema fields from a class declaration using `nox.reflect`.
+* `get_field(name: str) -> Field | None`: Looks up a field by internal attribute name or external JSON alias.
+* `require_field(name: str) -> Field`: Returns the specified field, raising `ValueError` if absent (eliminates optional narrowing boilerplate when configuring constraints).
 * `set_policy(policy: int) -> None`: Sets the unknown fields policy (`POLICY_FORBID`, `POLICY_IGNORE`, `POLICY_ALLOW`).
 * `set_coercion(mode: int) -> None`: Sets strict or lax coercion (`COERCION_STRICT`, `COERCION_LAX`).
 * `field_str(name: str) -> Field`: Declares a string field.
@@ -51,6 +63,9 @@ Fluent builder for configuring field rules and constraints.
 * `alias(json_key: str) -> Field`: Maps external JSON keys to the model field name.
 * `optional() -> Field`: Makes the field optional.
 * `nullable() -> Field`: Allows explicit null values.
+* `is_nullable() -> bool`: Returns true if the field accepts JSON `null`.
+* `is_optional() -> bool`: Returns true if the field may be absent.
+* `is_required() -> bool`: Returns true if the field must be present.
 * `secret() -> Field`: Masks the field value as `[REDACTED]` in error reports.
 * `default_s(v: str) -> Field`: Sets a string default (applies on missing fields).
 * `default_i(v: int) -> Field`: Sets an integer default.

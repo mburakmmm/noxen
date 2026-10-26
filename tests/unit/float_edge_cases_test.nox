@@ -1,0 +1,139 @@
+# tests/unit/float_edge_cases_test.nox
+# Comprehensive float edge case and IEEE 754 boundary test suite for Noxen.
+# Verifies JSON RFC 8259 strict compliance, non-finite float rejection, negative zero, subnormals, and precision.
+
+import nox.test
+import schema
+import core
+from schema import Schema, COERCION_LAX, COERCION_STRICT
+from core import ValidatedData, ValidationResult
+from errors import CODE_INVALID_JSON, CODE_TYPE_MISMATCH, CODE_OUT_OF_RANGE
+
+# Helper for approximate equality
+def is_float_approx_eq(a: float, b: float, rel_tol: float = 1e-6, abs_floor: float = 1e-9) -> bool:
+    diff: float = a - b
+    if diff < 0.0:
+        diff = -diff
+    mag: float = a
+    if mag < 0.0:
+        mag = -mag
+    b_mag: float = b
+    if b_mag < 0.0:
+        b_mag = -b_mag
+    if b_mag > mag:
+        mag = b_mag
+    tol: float = mag * rel_tol
+    if tol < abs_floor:
+        tol = abs_floor
+    return diff <= tol
+
+# -----------------------------------------------------------------------------
+# 1. RFC 8259 Non-Finite Rejection in Raw JSON
+# -----------------------------------------------------------------------------
+s_num: Schema = Schema("Item")
+s_num.field_float("val")
+
+# 1.1 NaN in JSON string
+r_nan: ValidationResult = s_num.validate_json("{\"val\": NaN}")
+nox.test.assert_true(not r_nan.is_valid, "Raw NaN rejected by JSON parser")
+nox.test.assert_eq_str(r_nan.errors[0].code, CODE_INVALID_JSON, "Error code is invalid_json")
+
+# 1.2 Infinity in JSON string
+r_inf: ValidationResult = s_num.validate_json("{\"val\": Infinity}")
+nox.test.assert_true(not r_inf.is_valid, "Raw Infinity rejected by JSON parser")
+nox.test.assert_eq_str(r_inf.errors[0].code, CODE_INVALID_JSON, "Error code is invalid_json")
+
+# 1.3 -Infinity in JSON string
+r_ninf: ValidationResult = s_num.validate_json("{\"val\": -Infinity}")
+nox.test.assert_true(not r_ninf.is_valid, "Raw -Infinity rejected by JSON parser")
+nox.test.assert_eq_str(r_ninf.errors[0].code, CODE_INVALID_JSON, "Error code is invalid_json")
+
+# -----------------------------------------------------------------------------
+# 2. Rejection of Non-Finite Representations in Lax Coercion
+# -----------------------------------------------------------------------------
+s_lax: Schema = Schema("LaxItem")
+s_lax.set_coercion(COERCION_LAX)
+s_lax.field_float("val")
+
+# "nan" string coercion rejected
+r_lax_nan: ValidationResult = s_lax.validate_json("{\"val\": \"nan\"}")
+nox.test.assert_true(not r_lax_nan.is_valid, "'nan' string rejected under lax mode")
+nox.test.assert_eq_str(r_lax_nan.errors[0].code, CODE_TYPE_MISMATCH, "Error code is type_mismatch")
+
+# "inf" string coercion rejected
+r_lax_inf: ValidationResult = s_lax.validate_json("{\"val\": \"inf\"}")
+nox.test.assert_true(not r_lax_inf.is_valid, "'inf' string rejected under lax mode")
+
+# "-inf" string coercion rejected
+r_lax_ninf: ValidationResult = s_lax.validate_json("{\"val\": \"-inf\"}")
+nox.test.assert_true(not r_lax_ninf.is_valid, "'-inf' string rejected under lax mode")
+
+# "Infinity" string coercion rejected
+r_lax_c_inf: ValidationResult = s_lax.validate_json("{\"val\": \"Infinity\"}")
+nox.test.assert_true(not r_lax_c_inf.is_valid, "'Infinity' string rejected under lax mode")
+
+# -----------------------------------------------------------------------------
+# 3. Valid Float Representations: Negative Zero, Subnormals, Scientific
+# -----------------------------------------------------------------------------
+# 3.1 Negative zero (-0.0)
+r_neg_zero: ValidationResult = s_num.validate_json("{\"val\": -0.0}")
+nox.test.assert_true(r_neg_zero.is_valid, "-0.0 is valid JSON number")
+nox.test.assert_true(is_float_approx_eq(r_neg_zero.data.get_float("val"), 0.0), "-0.0 approximately equals 0.0")
+
+# 3.2 Scientific notation (small subnormal / near zero)
+r_small: ValidationResult = s_num.validate_json("{\"val\": 1e-15}")
+nox.test.assert_true(r_small.is_valid, "1e-15 is valid JSON number")
+nox.test.assert_true(is_float_approx_eq(r_small.data.get_float("val"), 1e-15, 1e-4, 1e-18), "1e-15 accurately parsed")
+
+# 3.3 Large finite numbers
+r_large: ValidationResult = s_num.validate_json("{\"val\": 1.7976931348623157e+308}")
+nox.test.assert_true(r_large.is_valid, "Large finite float is valid")
+
+# -----------------------------------------------------------------------------
+# 4. Strict vs Lax Float Validation
+# -----------------------------------------------------------------------------
+s_strict: Schema = Schema("StrictItem")
+s_strict.field_float("val")
+
+# In strict mode, string "12.34" must be rejected
+r_str_strict: ValidationResult = s_strict.validate_json("{\"val\": \"12.34\"}")
+nox.test.assert_true(not r_str_strict.is_valid, "String '12.34' rejected in strict mode")
+
+# In lax mode, string "12.34" is coerced
+r_str_lax: ValidationResult = s_lax.validate_json("{\"val\": \"12.34\"}")
+nox.test.assert_true(r_str_lax.is_valid, "String '12.34' coerced in lax mode")
+nox.test.assert_true(is_float_approx_eq(r_str_lax.data.get_float("val"), 12.34), "Coerced value matches 12.34")
+
+# -----------------------------------------------------------------------------
+# 5. Numeric Bounds on Floats
+# -----------------------------------------------------------------------------
+s_bounded: Schema = Schema("BoundedFloat")
+s_bounded.field_float("ratio").ge(0.0).le(1.0)
+
+# Exact lower bound 0.0
+r_b0: ValidationResult = s_bounded.validate_json("{\"ratio\": 0.0}")
+nox.test.assert_true(r_b0.is_valid, "0.0 passes ge(0.0)")
+
+# Exact upper bound 1.0
+r_b1: ValidationResult = s_bounded.validate_json("{\"ratio\": 1.0}")
+nox.test.assert_true(r_b1.is_valid, "1.0 passes le(1.0)")
+
+# Out of range (< 0.0)
+r_blow: ValidationResult = s_bounded.validate_json("{\"ratio\": -0.0001}")
+nox.test.assert_true(not r_blow.is_valid, "-0.0001 rejected by ge(0.0)")
+nox.test.assert_eq_str(r_blow.errors[0].code, CODE_OUT_OF_RANGE, "Error code is out_of_range")
+
+# Out of range (> 1.0)
+r_bhigh: ValidationResult = s_bounded.validate_json("{\"ratio\": 1.0001}")
+nox.test.assert_true(not r_bhigh.is_valid, "1.0001 rejected by le(1.0)")
+nox.test.assert_eq_str(r_bhigh.errors[0].code, CODE_OUT_OF_RANGE, "Error code is out_of_range")
+
+# -----------------------------------------------------------------------------
+# 6. Serialization Round-Trip
+# -----------------------------------------------------------------------------
+dumped: str = s_bounded.dump(r_b1.data)
+r_re: ValidationResult = s_bounded.validate_json(dumped)
+nox.test.assert_true(r_re.is_valid, "Dumped float json re-validates cleanly")
+nox.test.assert_true(is_float_approx_eq(r_re.data.get_float("ratio"), 1.0), "Round-tripped ratio matches 1.0")
+
+print("float_edge_cases_test passed")

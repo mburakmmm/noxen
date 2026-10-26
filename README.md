@@ -11,9 +11,9 @@
 
 **Statically typed data modeling, parsing, validation, and high-performance serialization for the [Nox programming language](https://noxlang.com).**
 
-*The idiomatic, reflection-free Pydantic counterpart for the Nox ecosystem with JSON Schema Draft 2020-12 compliance and Aether / Nyx adapters.*
+*The idiomatic, statically typed Pydantic counterpart for the Nox ecosystem with zero-boilerplate automatic model derivation (`auto_schema`), JSON Schema Draft 2020-12 compliance, and Aether / Nyx adapters.*
 
-[Quick Start](#quick-start) • [Features](#highlights) • [Benchmarks](#benchmarks) • [Real-World Architecture](#real-world-service-architecture) • [Documentation](#documentation--license) • [Releases](https://github.com/mburakmmm/noxen/releases)
+[Quick Start](#quickstart) • [Features](#highlights) • [Benchmarks](#benchmarks) • [Real-World Architecture](#real-world-service-architecture) • [Documentation](#documentation--license) • [Releases](https://github.com/mburakmmm/noxen/releases)
 
 </div>
 
@@ -21,7 +21,7 @@
 
 ## Overview
 
-**Noxen** brings the useful core of Pydantic to the Nox ecosystem — designed from the ground up as an idiomatic, ahead-of-time compiled, statically typed library with zero runtime reflection overhead or dynamic monkey patching.
+**Noxen** brings the useful core of Pydantic to the Nox ecosystem — designed from the ground up as an idiomatic, ahead-of-time compiled, statically typed library with zero-boilerplate automatic model derivation via `nox.reflect`, strict static typing, and high-performance serialization.
 
 ```text
        JSON String / Database Row / HTTP Body
@@ -50,6 +50,7 @@
 
 ### Highlights
 
+* **Automatic Schema Derivation (`auto_schema`)**: Zero-boilerplate schema construction using Nox's standard library reflection (`nox.reflect`). Incurs zero manual field declarations while recursively resolving nested classes, nullable optionals (`T | None`), and lists (`list[T]`).
 * **Statically Typed Models**: Bind incoming JSON directly into strongly typed Nox classes with compile-time safety via monomorphised generic `ModelSchema[T]`.
 * **Strict by Default**: Extra fields are rejected by default (`POLICY_FORBID`), and implicit type coercions are disallowed in strict mode.
 * **O(1) Serializer Key Collision Protection**: `Serializer` tracks written property keys using a hash set, ensuring $O(N)$ total complexity and preventing duplicate JSON keys.
@@ -88,7 +89,7 @@ Add Noxen to your project's `nox.json`:
     {
       "alias": "noxen",
       "repo": "github.com/mburakmmm/noxen",
-      "ref": "v0.6.0"
+      "ref": "v0.7.0"
     }
   ]
 }
@@ -103,54 +104,75 @@ noxc fetch
 Or install via `noxc`:
 
 ```sh
-noxc add noxen github.com/mburakmmm/noxen --ref v0.6.0
+noxc add noxen github.com/mburakmmm/noxen --ref v0.7.0
 ```
 
 ---
 
 ## Quickstart
 
+### 1. Automatic Schema Derivation (Zero Boilerplate)
+
 ```nox
 import noxen
-from noxen import Schema, ModelSchema, ValidatedData, Result
+import models
+import core
+from noxen import Schema, auto_schema
+from models import ModelSchema, BidirectionalModel
+from core import ValidatedData, Result
+
+class Address:
+    city: str
+    country: str
+    def __init__(self: Address, city: str, country: str) -> None:
+        self.city = city
+        self.country = country
 
 class User:
     name: str
     age: int
     email: str
     bio: str | None
+    addr: Address
+    tags: list[str]
 
-    def __init__(self: User, name: str, age: int, email: str, bio: str | None) -> None:
+    def __init__(self: User, name: str, age: int, email: str, bio: str | None, addr: Address, tags: list[str]) -> None:
         self.name = name
         self.age = age
         self.email = email
         self.bio = bio
+        self.addr = addr
+        self.tags = tags
 
-# 1. Define schema
-user_schema: Schema = Schema("User")
-user_schema.field_str("name").min_length(2).max_length(50)
-user_schema.field_int("age").min(0.0).max(120.0)
-user_schema.field_str("email").email()
-user_schema.field_str("bio").optional().nullable()
+# In 1 line, auto_schema inspects User's signature, resolves Address, bio (nullable), and tags (list)
+user_schema: Schema = auto_schema("User")
 
-# 2. Bind typed factory
+# Optionally attach fluent constraints
+user_schema.require_field("name").min_length(2).max_length(50)
+user_schema.require_field("age").min_i(18).max_i(120)
+user_schema.require_field("email").email()
+
+# Bind typed factory
 def make_user(d: ValidatedData) -> User:
+    sub_addr: ValidatedData = d.get_object("addr")
     return User(
         d.get_str("name"),
         d.get_int("age"),
         d.get_str("email"),
-        d.get_opt_str("bio")
+        d.get_opt_str("bio"),
+        Address(sub_addr.get_str("city"), sub_addr.get_str("country")),
+        d.get_list_str("tags")
     )
 
 model: ModelSchema[User] = ModelSchema[User](user_schema, make_user)
 
-# 3. Parse and validate JSON
-json_input: str = "{\"name\":\"Ada Lovelace\",\"age\":36,\"email\":\"ada@example.com\"}"
+# Parse & validate incoming JSON
+json_input: str = "{\"name\":\"Ada Lovelace\",\"age\":36,\"email\":\"ada@example.com\",\"bio\":null,\"addr\":{\"city\":\"London\",\"country\":\"UK\"},\"tags\":[\"math\",\"cs\"]}"
 res: Result[User] = model.parse_json(json_input)
 
 if res.is_ok:
     user: User = res.unwrap()
-    print("Welcome,", user.name, "- Email:", user.email)
+    print("Welcome,", user.name, "- City:", user.addr.city)
 else:
     print("Validation failed:", res.errors[0].message)
 ```

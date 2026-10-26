@@ -141,6 +141,27 @@ nox.test.assert_eq_str(e2.name, "Bob Jones", "e2 name is Bob Jones")
 nox.test.assert_eq_int(len(e2.addresses), 1, "e2 has 1 address")
 nox.test.assert_eq_str(e2.addresses[0].city, "Tokyo", "e2 addr 0 city is Tokyo")
 
+def assert_address_deep_eq(expected: Address, actual: Address, context: str) -> None:
+    nox.test.assert_eq_str(actual.city, expected.city, context + " city matches")
+    nox.test.assert_eq_str(actual.country, expected.country, context + " country matches")
+
+def assert_employee_deep_eq(expected: Employee, actual: Employee, context: str) -> None:
+    nox.test.assert_eq_int(actual.id, expected.id, context + " id matches")
+    nox.test.assert_eq_str(actual.name, expected.name, context + " name matches")
+    nox.test.assert_eq_int(len(actual.addresses), len(expected.addresses), context + " address count matches")
+    ai: int = 0
+    while ai < len(expected.addresses):
+        assert_address_deep_eq(expected.addresses[ai], actual.addresses[ai], context + " address[" + str(ai) + "]")
+        ai = ai + 1
+
+def assert_company_deep_eq(expected: Company, actual: Company, context: str) -> None:
+    nox.test.assert_eq_str(actual.name, expected.name, context + " company name matches")
+    nox.test.assert_eq_int(len(actual.employees), len(expected.employees), context + " employee count matches")
+    ei: int = 0
+    while ei < len(expected.employees):
+        assert_employee_deep_eq(expected.employees[ei], actual.employees[ei], context + " employee[" + str(ei) + "]")
+        ei = ei + 1
+
 # -----------------------------------------------------------------------------
 # Scenario 2: Bi-Directional Round-Trip (dump & dump_validated)
 # -----------------------------------------------------------------------------
@@ -151,10 +172,9 @@ nox.test.assert_eq_str(dumped_fast, dumped_val, "dump and dump_validated match o
 res_roundtrip: Result[Company] = company_model.parse_json(dumped_val)
 nox.test.assert_true(res_roundtrip.is_ok, "Serialized nested array JSON re-parses cleanly")
 c_rt: Company = res_roundtrip.unwrap()
-nox.test.assert_eq_str(c_rt.name, "OmniCorp", "Round-trip company name intact")
-nox.test.assert_eq_int(len(c_rt.employees), 2, "Round-trip employees count intact")
-nox.test.assert_eq_str(c_rt.employees[0].addresses[0].city, "San Francisco", "Round-trip deep nested field intact")
-nox.test.assert_eq_str(c_rt.employees[1].addresses[0].city, "Tokyo", "Round-trip employee 2 address intact")
+
+# 100% Comprehensive deep equality assertion across all fields, nested objects, and elements:
+assert_company_deep_eq(c, c_rt, "Scenario 2 Round-trip")
 
 # -----------------------------------------------------------------------------
 # Scenario 3: Deep Array Error Path Attribution

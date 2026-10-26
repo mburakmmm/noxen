@@ -5,6 +5,32 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-10-26
+
+### Added
+- **Zero-Boilerplate Automatic Schema Derivation (`auto_schema`)**:
+  - Implemented `auto_schema(class_name: str) -> Schema` and `schema_from_class(class_name: str) -> Schema` leveraging the standard library `nox.reflect` module.
+  - Automatically inspects class signatures and constructor parameters without any manual field declaration overhead.
+  - Recursively resolves and binds:
+    - Primitive types (`str`, `int`, `float`, `bool`)
+    - Optional & nullable primitives and models (`T | None`) as `.optional().nullable()`
+    - Primitive arrays (`list[str]`, `list[int]`, `list[float]`, `list[bool]`)
+    - Nested models and sub-schemas (`field_object`)
+    - Arrays of nested models (`field_list_schema`)
+  - Added `Schema.derive_from_class(class_name: str) -> Schema` for fluent class-to-schema population.
+  - Added `Schema.require_field(name: str) -> Field` to eliminate optional-narrowing boilerplate when attaching fluent constraints (`min_i`, `max_i`, `email`, etc.).
+  - Added `Field.is_nullable() -> bool`, `Field.is_optional() -> bool`, and `Field.is_required() -> bool` inspection helpers.
+  - Added comprehensive unit test `tests/unit/auto_schema_test.nox` and dedicated runnable example `examples/auto_model.nox`.
+- **Multi-Level Deep Equality Assertions for Nested Array Round-Trips**:
+  - Upgraded `tests/integration/nested_array_test.nox` with `assert_company_deep_eq`, asserting 100% of fields across all array elements and sub-objects (`Company -> employees[] -> addresses[]`) byte-for-byte during round-trip serialization.
+- **Float Special Values Policy & Boundary Verification**:
+  - Implemented RFC 8259-compliant rejection of non-finite floats (`NaN`, `Infinity`, `-Infinity`) during JSON parsing and lax string coercion.
+  - Added dedicated test suite `tests/unit/float_edge_cases_test.nox` verifying negative zero (`-0.0`), subnormals (`1e-15`), large finite floats (`1.7976931348623157e+308`), numeric range bounds, and adaptive relative float equality (`is_float_approx_eq`).
+- **Semantic & Structured Backend Parity Verification**:
+  - Upgraded `scripts/verify_backend_parity.py` beyond raw stdout comparison to extract, parse, and semantically compare structured JSON verdicts and state outputs between LLVM and QBE across 10 core targets.
+- **Deterministic CI Pinning**:
+  - Pinned installer scripts in `.github/workflows/ci.yml` to release tag `v2.0.27` (`https://raw.githubusercontent.com/mburakmmm/nox-lang/v2.0.27/install.sh` and `install.ps1`) for reproducible builds.
+
 ## [0.6.0] - 2026-10-26
 
 ### Added

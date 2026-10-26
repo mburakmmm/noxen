@@ -1,0 +1,142 @@
+# tests/unit/auto_schema_test.nox
+# Comprehensive test suite for Noxen's automatic reflection-based schema derivation.
+
+import nox.test
+import schema
+import core
+import models
+from schema import Schema, Field, auto_schema, schema_from_class
+from core import ValidatedData, ValidationResult, Result
+from models import ModelSchema, BidirectionalModel
+
+class GeoLocation:
+    lat: float
+    lng: float
+    def __init__(self: GeoLocation, lat: float, lng: float) -> None:
+        self.lat = lat
+        self.lng = lng
+
+class Address:
+    city: str
+    country: str
+    geo: GeoLocation
+    def __init__(self: Address, city: str, country: str, geo: GeoLocation) -> None:
+        self.city = city
+        self.country = country
+        self.geo = geo
+
+class Profile:
+    nickname: str
+    bio: str | None
+    age: int | None
+    is_active: bool
+    tags: list[str]
+    addr: Address
+    backup_addrs: list[Address]
+    def __init__(self: Profile, nickname: str, bio: str | None, age: int | None, is_active: bool, tags: list[str], addr: Address, backup_addrs: list[Address]) -> None:
+        self.nickname = nickname
+        self.bio = bio
+        self.age = age
+        self.is_active = is_active
+        self.tags = tags
+        self.addr = addr
+        self.backup_addrs = backup_addrs
+
+# 1. Test basic auto_schema derivation
+s_geo: Schema = auto_schema("GeoLocation")
+nox.test.assert_eq_str(s_geo.name, "GeoLocation", "Schema name matches")
+nox.test.assert_eq_int(len(s_geo.fields), 2, "GeoLocation has 2 fields")
+nox.test.assert_eq_str(s_geo.require_field("lat").kind, "float", "lat is float")
+nox.test.assert_eq_str(s_geo.require_field("lng").kind, "float", "lng is float")
+
+# 2. Test recursive nested auto_schema derivation
+s_addr: Schema = schema_from_class("Address")
+nox.test.assert_eq_str(s_addr.name, "Address", "Address schema name matches")
+nox.test.assert_eq_int(len(s_addr.fields), 3, "Address has 3 fields")
+nox.test.assert_eq_str(s_addr.require_field("city").kind, "string", "city is string")
+nox.test.assert_eq_str(s_addr.require_field("geo").kind, "object", "geo is object")
+
+geo_sub: Schema | None = s_addr.require_field("geo").nested_schema
+if geo_sub != None:
+    nox.test.assert_eq_str(geo_sub.name, "GeoLocation", "nested schema is GeoLocation")
+else:
+    nox.test.assert_true(False, "geo nested_schema must not be None")
+
+# 3. Test comprehensive Profile auto_schema derivation (primitives, optionals, lists, nested objects, list of objects)
+s_prof: Schema = Schema("Profile")
+s_prof.derive_from_class("Profile")
+nox.test.assert_eq_str(s_prof.name, "Profile", "Profile schema name matches")
+nox.test.assert_eq_int(len(s_prof.fields), 7, "Profile has 7 fields")
+
+# Field kinds and nullability
+f_nick: Field = s_prof.require_field("nickname")
+nox.test.assert_eq_str(f_nick.kind, "string", "nickname is string")
+nox.test.assert_true(not f_nick.is_nullable(), "nickname is not nullable")
+
+f_bio: Field = s_prof.require_field("bio")
+nox.test.assert_eq_str(f_bio.kind, "string", "bio is string")
+nox.test.assert_true(f_bio.is_nullable(), "bio is nullable")
+
+f_age: Field = s_prof.require_field("age")
+nox.test.assert_eq_str(f_age.kind, "int", "age is int")
+nox.test.assert_true(f_age.is_nullable(), "age is nullable")
+
+f_active: Field = s_prof.require_field("is_active")
+nox.test.assert_eq_str(f_active.kind, "bool", "is_active is bool")
+nox.test.assert_true(not f_active.is_nullable(), "is_active is not nullable")
+
+f_tags: Field = s_prof.require_field("tags")
+nox.test.assert_eq_str(f_tags.kind, "list", "tags is list")
+nox.test.assert_eq_str(f_tags.item_kind, "string", "tags item_kind is string")
+
+f_addr: Field = s_prof.require_field("addr")
+nox.test.assert_eq_str(f_addr.kind, "object", "addr is object")
+addr_sub: Schema | None = f_addr.nested_schema
+if addr_sub != None:
+    nox.test.assert_eq_str(addr_sub.name, "Address", "addr nested schema is Address")
+else:
+    nox.test.assert_true(False, "addr nested_schema must not be None")
+
+f_baddrs: Field = s_prof.require_field("backup_addrs")
+nox.test.assert_eq_str(f_baddrs.kind, "list", "backup_addrs is list")
+nox.test.assert_eq_str(f_baddrs.item_kind, "object", "backup_addrs item_kind is object")
+item_sub: Schema | None = f_baddrs.item_schema
+if item_sub != None:
+    nox.test.assert_eq_str(item_sub.name, "Address", "backup_addrs item_schema is Address")
+else:
+    nox.test.assert_true(False, "backup_addrs item_schema must not be None")
+
+# 4. Test method chaining on auto-derived schema
+s_prof.require_field("nickname").min_length(3).max_length(30)
+s_prof.require_field("age").min_i(18).max_i(120)
+
+# 5. Test JSON validation using auto-derived schema
+valid_json: str = "{\"nickname\":\"dev_burak\",\"bio\":null,\"age\":28,\"is_active\":true,\"tags\":[\"nox\",\"compiler\"],\"addr\":{\"city\":\"Zurich\",\"country\":\"Switzerland\",\"geo\":{\"lat\":47.3769,\"lng\":8.5417}},\"backup_addrs\":[{\"city\":\"Istanbul\",\"country\":\"Turkey\",\"geo\":{\"lat\":41.0082,\"lng\":28.9784}}]}"
+
+res_valid: ValidationResult = s_prof.validate_json(valid_json)
+nox.test.assert_true(res_valid.is_valid, "Valid Profile JSON passes validation")
+nox.test.assert_eq_str(res_valid.data.get_str("nickname"), "dev_burak", "Validated nickname matches")
+nox.test.assert_eq_int(res_valid.data.get_int("age"), 28, "Validated age matches")
+nox.test.assert_true(res_valid.data.is_null("bio"), "Validated bio is null")
+nox.test.assert_true(res_valid.data.get_bool("is_active"), "Validated is_active is true")
+nox.test.assert_eq_str(res_valid.data.get_object("addr").get_str("city"), "Zurich", "Validated addr city matches")
+
+# 6. Test constraint enforcement on chained auto-schema (nickname too short)
+invalid_json: str = "{\"nickname\":\"al\",\"bio\":\"Coder\",\"age\":15,\"is_active\":true,\"tags\":[],\"addr\":{\"city\":\"Zurich\",\"country\":\"Switzerland\",\"geo\":{\"lat\":47.3769,\"lng\":8.5417}},\"backup_addrs\":[]}"
+res_invalid: ValidationResult = s_prof.validate_json(invalid_json)
+nox.test.assert_true(not res_invalid.is_valid, "Invalid Profile JSON fails validation")
+nox.test.assert_true(len(res_invalid.errors) >= 2, "Both nickname and age errors caught")
+
+# 7. Test JSON Schema generation from auto-derived schema
+schema_json: str = s_prof.to_json_schema()
+nox.test.assert_true(len(schema_json) > 50, "JSON Schema generated non-empty string")
+
+# 8. Test unknown class reflection error handling
+failed: bool = False
+try:
+    bad_s: Schema = auto_schema("NonExistentClass123")
+except ValueError as e:
+    failed = True
+nox.test.assert_true(failed, "auto_schema raises ValueError on unknown class")
+
+print("auto_schema_test passed")

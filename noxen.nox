@@ -12,7 +12,7 @@ import db_adapter
 
 from errors import FieldError, ValidationError, CODE_CUSTOM
 from core import ValidatedData, ValidationResult, Result
-from schema import Schema, Field, POLICY_FORBID, POLICY_IGNORE, POLICY_ALLOW, MODE_REQUIRED, MODE_REQUIRED_NULLABLE, MODE_OPTIONAL, MODE_OPTIONAL_NULLABLE, COERCION_STRICT, COERCION_LAX
+from schema import Schema, Field, POLICY_FORBID, POLICY_IGNORE, POLICY_ALLOW, MODE_REQUIRED, MODE_REQUIRED_NULLABLE, MODE_OPTIONAL, MODE_OPTIONAL_NULLABLE, COERCION_STRICT, COERCION_LAX, auto_schema, schema_from_class
 from models import ModelSchema, BidirectionalModel
 from serialization import Serializer
 from http_adapter import json_200, json_201, json_422

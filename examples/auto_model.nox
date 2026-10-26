@@ -1,0 +1,93 @@
+# examples/auto_model.nox
+# Zero-boilerplate automatic model and schema derivation using Nox reflection.
+
+import noxen
+import models
+import core
+from noxen import Schema, auto_schema
+from models import ModelSchema, BidirectionalModel
+from core import ValidatedData, ValidationResult, Result
+
+class Address:
+    city: str
+    country: str
+    def __init__(self: Address, city: str, country: str) -> None:
+        self.city = city
+        self.country = country
+
+class UserProfile:
+    username: str
+    age: int
+    bio: str | None
+    addr: Address
+    skills: list[str]
+    def __init__(self: UserProfile, username: str, age: int, bio: str | None, addr: Address, skills: list[str]) -> None:
+        self.username = username
+        self.age = age
+        self.bio = bio
+        self.addr = addr
+        self.skills = skills
+
+def make_address(d: ValidatedData) -> Address:
+    return Address(d.get_str("city"), d.get_str("country"))
+
+def unparse_address(a: Address) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_str("city", a.city)
+    d.set_str("country", a.country)
+    return d
+
+def make_user_profile(d: ValidatedData) -> UserProfile:
+    sub_addr: ValidatedData = d.get_object("addr")
+    return UserProfile(
+        d.get_str("username"),
+        d.get_int("age"),
+        d.get_opt_str("bio"),
+        make_address(sub_addr),
+        d.get_list_str("skills")
+    )
+
+def unparse_user_profile(u: UserProfile) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_str("username", u.username)
+    d.set_int("age", u.age)
+    bio_val: str | None = u.bio
+    if bio_val != None:
+        d.set_str("bio", bio_val)
+    else:
+        d.set_null("bio")
+    d.set_object("addr", unparse_address(u.addr))
+    d.set_list_str("skills", u.skills)
+    return d
+
+print("=== Noxen Automatic Modeling & Reflection Demo ===")
+
+# 1. Automatic Schema Derivation: 0 boilerplate field definitions!
+# Nested models (Address), nullables (bio), and primitive lists (skills) are inferred automatically.
+profile_schema: Schema = auto_schema("UserProfile")
+
+# 2. Fluent constraint chaining on auto-derived fields
+profile_schema.require_field("username").min_length(3).max_length(30)
+profile_schema.require_field("age").min_i(18).max_i(120)
+
+print("Derived schema title:", profile_schema.name)
+print("Derived field count:", len(profile_schema.fields))
+
+# 3. Model binding
+profile_model: ModelSchema[UserProfile] = ModelSchema[UserProfile](profile_schema, make_user_profile)
+profile_bi: BidirectionalModel[UserProfile] = BidirectionalModel[UserProfile](profile_model, unparse_user_profile)
+
+# 4. Parse incoming JSON
+raw_json: str = "{\"username\":\"alice_dev\",\"age\":29,\"bio\":null,\"addr\":{\"city\":\"Zurich\",\"country\":\"Switzerland\"},\"skills\":[\"nox\",\"compiler\",\"concurrency\"]}"
+res: Result[UserProfile] = profile_bi.parse_json(raw_json)
+if res.is_ok:
+    u: UserProfile = res.unwrap()
+    print("Parsed user:", u.username, "age:", u.age, "city:", u.addr.city, "skills:", len(u.skills))
+
+    # 5. Round-trip serialization
+    dumped: str = profile_bi.dump_validated(u)
+    print("Dumped JSON:", dumped)
+
+# 6. Automatic JSON Schema Draft 2020-12 generation with nested $defs
+print("JSON Schema Draft 2020-12:")
+print(profile_schema.to_json_schema())
