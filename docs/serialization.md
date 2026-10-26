@@ -141,11 +141,11 @@ validated_json: str = user_bi.dump_validated(user)
 2. **`dump_validated(obj)` (Guaranteed Valid)**: Re-validates the unparsed model state against schema constraints before returning JSON, raising `ValidationError` on violations.
 3. **`validate_model(obj) -> ValidationResult`**: Inspects model state without throwing exceptions.
 
-### Key Collision Protection (Strict by Default)
+### Key Collision Protection (Strict by Default & O(1) Hash Tracking)
 
-Starting in `v0.4.1`, `Serializer()` is **strict by default**. Any attempt to write a duplicate key raises `ValueError` immediately. To opt out, call `Serializer(False)` or `Serializer().lax()`.
+Starting in `v0.5.0`, `Serializer()` is **strict by default** with **$O(1)$ hash set key lookup**. Any attempt to write a duplicate key raises `ValueError` immediately. Because key tracking is backed by `_written_map: dict[str, bool]`, collision checks take $O(1)$ time per key, guaranteeing $O(N)$ total serialization time even on models with hundreds of properties. To opt out, call `Serializer(False)` or `Serializer().lax()`.
 
-When `POLICY_ALLOW` is enabled, extra properties present in `ValidatedData` are serialized automatically without duplicate key bugs. `Serializer` tracks all written keys (`has_written_key`) so that extra properties colliding with defined schema fields are safely ignored during output generation.
+When `POLICY_ALLOW` is enabled, extra properties present in `ValidatedData` are serialized automatically without duplicate key bugs. `Serializer` tracks all written keys (`has_written_key`) via hash table so that extra properties colliding with defined schema fields are safely ignored during output generation.
 
 ---
 

@@ -73,10 +73,29 @@ def test_strict_mode_with_include_extras() -> None:
     out: str = s.build()
     nox.test.assert_true(len(out) > 0, "strict serializer includes extras without collision")
 
+def test_large_model_o1_key_tracking() -> None:
+    s: Serializer = Serializer()
+    i: int = 0
+    while i < 100:
+        s.int("field_" + str(i), i)
+        i = i + 1
+
+    # Verify duplicate on field_50 raises ValueError
+    caught: bool = False
+    try:
+        s.int("field_50", 999)
+    except ValueError as e:
+        caught = True
+
+    nox.test.assert_true(caught, "O(1) duplicate key check catches collision in 100-field serializer")
+    out: str = s.build()
+    nox.test.assert_true(len(out) > 0, "100-field serializer builds successfully")
+
 test_strict_keys_rejects_duplicate_primitive()
 test_strict_fluent_builder()
 test_strict_across_different_types()
 test_non_strict_mode_allows_manual_write()
 test_lax_fluent_builder_allows_manual_write()
 test_strict_mode_with_include_extras()
+test_large_model_o1_key_tracking()
 print("serializer_strict_test passed")

@@ -8,11 +8,13 @@ from core import ValidatedData
 class Serializer:
     _w: JsonWriter
     _written_keys: list[str]
+    _written_map: dict[str, bool]
     _strict_keys: bool
 
     def __init__(self: Serializer, strict_keys: bool = True) -> None:
         self._w = JsonWriter()
         self._written_keys = []
+        self._written_map = {}
         self._strict_keys = strict_keys
         self._w.begin_object()
 
@@ -31,17 +33,13 @@ class Serializer:
         return self._strict_keys
 
     def _record_key(self: Serializer, k: str) -> None:
-        if self._strict_keys and self.has_written_key(k):
+        if self._strict_keys and (k in self._written_map):
             raise ValueError("Duplicate JSON key '" + k + "' written to Serializer")
+        self._written_map[k] = True
         self._written_keys.append(k)
 
     def has_written_key(self: Serializer, k: str) -> bool:
-        i: int = 0
-        while i < len(self._written_keys):
-            if self._written_keys[i] == k:
-                return True
-            i = i + 1
-        return False
+        return k in self._written_map
 
     def str(self: Serializer, k: str, v: str) -> None:
         self._record_key(k)

@@ -1,0 +1,199 @@
+# examples/realworld_service.nox — Full end-to-end service combining Aether (HTTP) + Nyx (DB) + Noxen.
+# Demonstrates REST CRUD, SQLite hydration via DbAdapter, request validation, and validated JSON response output.
+
+import nox.test
+import nox.strings
+import nox.http
+from nox.http import HttpRequest, HttpResponse
+import nox.sqlite
+from nox.sqlite import Connection
+import nox.db
+from nox.db import Row
+import noxen
+import models
+import db_adapter
+import http_adapter
+import core
+from noxen import Schema, ValidatedData, Serializer
+from models import ModelSchema, BidirectionalModel
+from db_adapter import DbAdapter
+from http_adapter import json_200, json_201, json_422
+from core import Result
+
+# 1. Domain Entity: Product
+class Product:
+    id: int
+    sku: str
+    name: str
+    price_cents: int
+    in_stock: bool
+
+    def __init__(self, id: int, sku: str, name: str, price_cents: int, in_stock: bool) -> None:
+        self.id = id
+        self.sku = sku
+        self.name = name
+        self.price_cents = price_cents
+        self.in_stock = in_stock
+
+def make_product(d: ValidatedData) -> Product:
+    return Product(
+        d.get_int("id"),
+        d.get_str("sku"),
+        d.get_str("name"),
+        d.get_int("price_cents"),
+        d.get_bool("in_stock")
+    )
+
+def unparse_product(p: Product) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_int("id", p.id)
+    d.set_str("sku", p.sku)
+    d.set_str("name", p.name)
+    d.set_int("price_cents", p.price_cents)
+    d.set_bool("in_stock", p.in_stock)
+    return d
+
+# Product Schema (Used for DB hydration & validated output responses)
+product_schema: Schema = Schema("Product")
+product_schema.field_int("id").min_i(1)
+product_schema.field_str("sku").min_length(3).max_length(20).regex("^[A-Z0-9-]+$")
+product_schema.field_str("name").min_length(2).max_length(100)
+product_schema.field_int("price_cents").min_i(1).max_i(100000000)
+product_schema.field_bool("in_stock").default_b(True)
+
+product_model: ModelSchema[Product] = ModelSchema[Product](product_schema, make_product)
+product_bi: BidirectionalModel[Product] = BidirectionalModel[Product](product_model, unparse_product)
+product_db: DbAdapter[Product] = DbAdapter[Product](product_model)
+
+# 2. Request DTO: CreateProductDto
+class CreateProductDto:
+    sku: str
+    name: str
+    price_cents: int
+    in_stock: bool
+
+    def __init__(self, sku: str, name: str, price_cents: int, in_stock: bool) -> None:
+        self.sku = sku
+        self.name = name
+        self.price_cents = price_cents
+        self.in_stock = in_stock
+
+def make_create_dto(d: ValidatedData) -> CreateProductDto:
+    return CreateProductDto(
+        d.get_str("sku"),
+        d.get_str("name"),
+        d.get_int("price_cents"),
+        d.get_bool("in_stock")
+    )
+
+create_schema: Schema = Schema("CreateProductDto")
+create_schema.field_str("sku").min_length(3).max_length(20).regex("^[A-Z0-9-]+$")
+create_schema.field_str("name").min_length(2).max_length(100)
+create_schema.field_int("price_cents").min_i(1).max_i(100000000)
+create_schema.field_bool("in_stock").default_b(True)
+
+create_model: ModelSchema[CreateProductDto] = ModelSchema[CreateProductDto](create_schema, make_create_dto)
+
+# 3. Service Layer with In-Memory SQLite Database
+class ProductService:
+    conn: Connection
+    next_id: int
+
+    def __init__(self) -> None:
+        self.conn = nox.sqlite.open(":memory:")
+        self.conn.execute("CREATE TABLE products (id INTEGER PRIMARY KEY, sku TEXT, name TEXT, price_cents INT, in_stock INT)")
+        self.next_id = 1
+
+    def insert(self, sku: str, name: str, price_cents: int, in_stock: bool) -> Product:
+        pid: int = self.next_id
+        self.next_id = self.next_id + 1
+        stock_int: int = 0
+        if in_stock:
+            stock_int = 1
+        sql: str = "INSERT INTO products VALUES (" + str(pid) + ", '" + sku + "', '" + name + "', " + str(price_cents) + ", " + str(stock_int) + ")"
+        self.conn.execute(sql)
+        return Product(pid, sku, name, price_cents, in_stock)
+
+    def find_by_id(self, pid: int) -> Product | None:
+        sql: str = "SELECT id, sku, name, price_cents, in_stock FROM products WHERE id = " + str(pid)
+        rows: list[Row] = self.conn.query(sql)
+        if len(rows) == 0:
+            return None
+        # Hydrate and validate database row into typed domain entity
+        return product_db.parse_row(rows[0])
+
+# Global service instance
+service: ProductService = ProductService()
+
+# Seed database with initial inventory
+seed_prod: Product = service.insert("TECH-101", "Mechanical Keyboard", 12900, True)
+
+# 4. HTTP Controller Handlers (Aether Endpoints)
+def handle_create_product(req: HttpRequest) -> HttpResponse:
+    parsed: Result[CreateProductDto] = create_model.parse_json(req.body)
+    if not parsed.is_ok:
+        # Structured HTTP 422 Unprocessable Entity
+        return json_422(parsed.errors)
+
+    dto: CreateProductDto = parsed.unwrap()
+    created: Product = service.insert(dto.sku, dto.name, dto.price_cents, dto.in_stock)
+
+    # Output response using schema-validated dump
+    resp_body: str = product_bi.dump_validated(created)
+    return json_201(resp_body)
+
+def handle_get_product(pid: int) -> HttpResponse:
+    p: Product | None = service.find_by_id(pid)
+    if p is None:
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        return HttpResponse(404, "{\"error\":\"ProductNotFound\",\"id\":" + str(pid) + "}", headers)
+
+    # Validated serialization guarantees response conforms to Product schema
+    resp_body: str = product_bi.dump_validated(p)
+    return json_200(resp_body)
+
+# 5. Execute Demonstration Scenarios
+print("==================================================================")
+print("Noxen Real-World Service: Aether (HTTP) + Nyx (DB) + Noxen Core")
+print("==================================================================")
+
+# Scenario A: GET Seeded Product
+print("\n[Scenario 1] GET /api/products/1 (Database Hydration + Validated Output)")
+get_resp: HttpResponse = handle_get_product(1)
+print("HTTP Status:", get_resp.status)
+print("Response JSON:", get_resp.body)
+nox.test.assert_eq_int(200, get_resp.status, "GET returns HTTP 200")
+nox.test.assert_true(len(get_resp.body) > 0, "Response body present")
+
+# Scenario B: POST Invalid Product (Invalid SKU regex, non-positive price)
+print("\n[Scenario 2] POST /api/products (Invalid Payload -> HTTP 422)")
+bad_json: str = "{\"sku\":\"invalid sku with spaces!\",\"name\":\"Desk Mat\",\"price_cents\":-50}"
+bad_req: HttpRequest = HttpRequest("POST", "/api/products", bad_json, {}, "127.0.0.1")
+bad_resp: HttpResponse = handle_create_product(bad_req)
+print("HTTP Status:", bad_resp.status)
+print("Error Response JSON:")
+print(bad_resp.body)
+nox.test.assert_eq_int(422, bad_resp.status, "POST invalid returns HTTP 422")
+nox.test.assert_true(nox.strings.contains(bad_resp.body, "price_cents"), "Error response mentions price_cents")
+nox.test.assert_true(nox.strings.contains(bad_resp.body, "sku"), "Error response mentions sku")
+
+# Scenario C: POST Valid Product
+print("\n[Scenario 3] POST /api/products (Valid Payload -> HTTP 201 Created)")
+ok_json: str = "{\"sku\":\"DISP-4K-01\",\"name\":\"UltraWide 4K Monitor\",\"price_cents\":59900,\"in_stock\":true}"
+ok_req: HttpRequest = HttpRequest("POST", "/api/products", ok_json, {}, "127.0.0.1")
+ok_resp: HttpResponse = handle_create_product(ok_req)
+print("HTTP Status:", ok_resp.status)
+print("Created Product JSON:")
+print(ok_resp.body)
+nox.test.assert_eq_int(201, ok_resp.status, "POST valid returns HTTP 201")
+nox.test.assert_true(nox.strings.contains(ok_resp.body, "DISP-4K-01"), "Response contains SKU")
+
+# Scenario D: Verify Newly Created Product in Database via GET
+print("\n[Scenario 4] GET /api/products/2 (Verify Database Persistence)")
+get2_resp: HttpResponse = handle_get_product(2)
+print("HTTP Status:", get2_resp.status)
+print("Persisted Product JSON:", get2_resp.body)
+nox.test.assert_eq_int(200, get2_resp.status, "GET 2 returns HTTP 200")
+nox.test.assert_true(nox.strings.contains(get2_resp.body, "UltraWide 4K Monitor"), "Persisted product matches")
+
+print("\nAll Real-World Service scenarios executed and verified successfully!")

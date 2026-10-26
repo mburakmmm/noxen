@@ -5,6 +5,26 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-10-26
+
+### Added
+- **Serializer $O(1)$ Hash Key Tracking**:
+  - Replaced linear list scanning in `Serializer.has_written_key(k)` with a dedicated hash table `_written_map: dict[str, bool]`.
+  - Eliminates $O(N^2)$ cumulative serialization overhead when writing large models with dozens or hundreds of fields.
+  - Added stress verification test `test_large_model_o1_key_tracking` in `tests/unit/serializer_strict_test.nox` creating a 100-field serializer and verifying instant duplicate key detection.
+- **IEEE 754 Safe Integer Boundary Verification in `dump_validated()`**:
+  - Added explicit test coverage in `tests/unit/dump_validated_test.nox` verifying output re-validation around the IEEE 754 safe integer limit ($2^{53} - 1 = 9007199254740991$).
+  - Proves that boundary values up to 9007199254740991 pass strict output validation, while values $\ge 9007199254740992$ are rejected with `ValidationError` to protect downstream consumers from precision loss.
+- **Hardened JSON Schema Differential Testing**:
+  - Hardened `scripts/verify_json_schema.py` to eliminate silent skipping of malformed test lines. Any parsing failure or invalid JSON raises a fatal error immediately.
+  - Enforces a minimum threshold of 14 distinct scenarios evaluated against Python's official `Draft202012Validator`, certifying 100% agreement.
+- **Dedicated Benchmarks for Fast vs Validated Output Paths**:
+  - Added Benchmark 7 (`Validated Model Dump`) to `benchmarks/run_benchmarks.nox`.
+  - Measures the performance profile of the ultra-fast direct dump path (1,250,000 ops/sec) alongside the comprehensive validated dump path (555,555 ops/sec).
+- **Real-World End-to-End Service Architecture (`examples/realworld_service.nox`)**:
+  - Added a comprehensive reference implementation combining Aether (HTTP REST layer) + Nyx (SQLite persistence layer) + Noxen.
+  - Demonstrates full CRUD workflow: request body validation via `CreateProductDto`, error reporting with structured HTTP 422 responses (`json_422`), database hydration via `DbAdapter[Product]`, and response generation with `dump_validated()`.
+
 ## [0.4.1] - 2026-10-26
 
 ### Added

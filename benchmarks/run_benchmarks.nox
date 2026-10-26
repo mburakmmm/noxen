@@ -192,7 +192,7 @@ if elapsed5 <= 0:
 ops_sec5: int = int((float(ITERATIONS) / (float(elapsed5) / 1000.0)))
 print("5. Deep Hierarchy Parsing (3L): ", elapsed5, "ms  | ", ops_sec5, "ops/sec")
 
-# Benchmark 6: Bidirectional Automated Model Dump (Reflection-Free)
+# Benchmark 6: Bidirectional Automated Model Dump (Reflection-Free Fast Path)
 t6: Instant = nox.time.instant_now()
 w: int = 0
 while w < ITERATIONS:
@@ -202,7 +202,19 @@ elapsed6: int = t6.elapsed_ms()
 if elapsed6 <= 0:
     elapsed6 = 1
 ops_sec6: int = int((float(ITERATIONS) / (float(elapsed6) / 1000.0)))
-print("6. Automated Model Dump (bi):   ", elapsed6, "ms  | ", ops_sec6, "ops/sec")
+print("6. Fast Model Dump (bi):        ", elapsed6, "ms  | ", ops_sec6, "ops/sec")
+
+# Benchmark 7: Validated Model Dump (dump_validated with Output Re-validation)
+t7: Instant = nox.time.instant_now()
+w7: int = 0
+while w7 < ITERATIONS:
+    dumped_v: str = user_bi.dump_validated(sample_user)
+    w7 = w7 + 1
+elapsed7: int = t7.elapsed_ms()
+if elapsed7 <= 0:
+    elapsed7 = 1
+ops_sec7: int = int((float(ITERATIONS) / (float(elapsed7) / 1000.0)))
+print("7. Validated Model Dump (chk):  ", elapsed7, "ms  | ", ops_sec7, "ops/sec")
 
 print("-----------------------------------------------------------------")
 print("Benchmark complete.")

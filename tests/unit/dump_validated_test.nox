@@ -73,4 +73,41 @@ except ValidationError as e:
 
 nox.test.assert_true(caught_validation_err, "dump_validated raises ValidationError on invalid model state")
 
+# Test 4: IEEE 754 safe integer boundary in dump_validated (9007199254740991 vs 9007199254740992)
+class Account:
+    id: int
+    balance: int
+    def __init__(self, id: int, balance: int) -> None:
+        self.id = id
+        self.balance = balance
+
+def make_account(d: ValidatedData) -> Account:
+    return Account(d.get_int("id"), d.get_int("balance"))
+
+def unparse_account(a: Account) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_int("id", a.id)
+    d.set_int("balance", a.balance)
+    return d
+
+account_schema: Schema = Schema("Account")
+account_schema.field_int("id").min_i(1).max_i(9007199254740991)
+account_schema.field_int("balance").min_i(0)
+
+account_model: ModelSchema[Account] = ModelSchema[Account](account_schema, make_account)
+account_bi: BidirectionalModel[Account] = BidirectionalModel[Account](account_model, unparse_account)
+
+acc_max: Account = Account(9007199254740991, 500)
+dumped_acc: str = account_bi.dump_validated(acc_max)
+nox.test.assert_true(len(dumped_acc) > 0, "safe max integer 9007199254740991 dumps and validates successfully")
+
+acc_overflow: Account = Account(9007199254740992, 500)
+caught_overflow_err: bool = False
+try:
+    account_bi.dump_validated(acc_overflow)
+except ValidationError as e:
+    caught_overflow_err = True
+
+nox.test.assert_true(caught_overflow_err, "dump_validated rejects integer exceeding IEEE 754 safe boundary 9007199254740991")
+
 print("dump_validated_test passed")

@@ -54,16 +54,27 @@ def main():
     cases_block = output[c_start_idx + len(c_start_tag):c_end_idx].strip()
     lines = [line.strip() for line in cases_block.splitlines() if line.strip()]
 
+    if len(lines) < 14:
+        print(f"FATAL ERROR: Expected at least 14 differential test scenarios, but found {len(lines)}")
+        sys.exit(1)
+
     print(f"\n3. Running Differential Testing across {len(lines)} test scenarios...")
     print("   Comparing Noxen validation results against Python Draft202012Validator:")
 
     mismatch_count = 0
-    for line in lines:
+    executed_count = 0
+    for line_idx, line in enumerate(lines, 1):
         parts = line.split(":::")
         if len(parts) != 3:
-            continue
+            print(f"FATAL ERROR: Malformed differential test line #{line_idx}: '{line}' (expected exactly 3 ':::'-separated parts)")
+            sys.exit(1)
+
         case_name, noxen_verdict, payload_str = parts
-        payload = json.loads(payload_str)
+        try:
+            payload = json.loads(payload_str)
+        except json.JSONDecodeError as e:
+            print(f"FATAL ERROR: Invalid JSON payload in scenario '{case_name}': {e}")
+            sys.exit(1)
 
         py_is_valid = validator.is_valid(payload)
         py_verdict = "VALID" if py_is_valid else "REJECTED"
@@ -73,13 +84,14 @@ def main():
             mismatch_count += 1
         else:
             print(f"   [DIFFERENTIAL OK] Case '{case_name}': Both agreed on {py_verdict}")
+        executed_count += 1
 
     if mismatch_count > 0:
         print(f"\nFAILED: {mismatch_count} differential testing mismatches found!")
         sys.exit(1)
 
-    print(f"\nALL {len(lines)} DIFFERENTIAL TEST SCENARIOS PASSED WITH 100% AGREEMENT!")
-    print("Noxen runtime validation and emitted JSON Schema Draft 2020-12 are fully isomorphic.")
+    print(f"\nALL {executed_count} DIFFERENTIAL TEST SCENARIOS PASSED WITH 100% AGREEMENT!")
+    print("Noxen runtime validation and emitted JSON Schema Draft 2020-12 agree 100% across all evaluated scenarios.")
 
 if __name__ == "__main__":
     main()
