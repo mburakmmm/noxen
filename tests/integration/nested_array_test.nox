@@ -1,0 +1,198 @@
+# tests/integration/nested_array_test.nox
+# Comprehensive multi-level nested array and object hierarchy integration test for Noxen.
+# Tests Company -> employees[] -> addresses[] schema validation, path error attribution, and round-trip serialization.
+
+import nox.test
+import schema
+import core
+import models
+import serialization
+from schema import Schema
+from core import ValidatedData, ValidationResult, Result
+from models import ModelSchema, BidirectionalModel
+from errors import CODE_STRING_TOO_SHORT, CODE_OUT_OF_RANGE, CODE_TYPE_MISMATCH
+
+# -----------------------------------------------------------------------------
+# 1. Domain Entities
+# -----------------------------------------------------------------------------
+class Address:
+    city: str
+    country: str
+
+    def __init__(self, city: str, country: str) -> None:
+        self.city = city
+        self.country = country
+
+class Employee:
+    id: int
+    name: str
+    addresses: list[Address]
+
+    def __init__(self, id: int, name: str, addresses: list[Address]) -> None:
+        self.id = id
+        self.name = name
+        self.addresses = addresses
+
+class Company:
+    name: str
+    employees: list[Employee]
+
+    def __init__(self, name: str, employees: list[Employee]) -> None:
+        self.name = name
+        self.employees = employees
+
+# -----------------------------------------------------------------------------
+# 2. Schemas & Constraints
+# -----------------------------------------------------------------------------
+addr_schema: Schema = Schema("Address")
+addr_schema.field_str("city").min_length(2).max_length(50)
+addr_schema.field_str("country").min_length(2).max_length(50)
+
+emp_schema: Schema = Schema("Employee")
+emp_schema.field_int("id").min_i(1).max_i(1000000)
+emp_schema.field_str("name").min_length(2).max_length(100)
+emp_schema.field_list_schema("addresses", addr_schema)
+
+company_schema: Schema = Schema("Company")
+company_schema.field_str("name").min_length(2).max_length(100)
+company_schema.field_list_schema("employees", emp_schema)
+
+# -----------------------------------------------------------------------------
+# 3. Model Mappers & Unparsers
+# -----------------------------------------------------------------------------
+def make_address(d: ValidatedData) -> Address:
+    return Address(d.get_str("city"), d.get_str("country"))
+
+def unparse_address(a: Address) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_str("city", a.city)
+    d.set_str("country", a.country)
+    return d
+
+def make_employee(d: ValidatedData) -> Employee:
+    addrs_data: list[ValidatedData] = d.get_list_object("addresses")
+    addrs: list[Address] = []
+    i: int = 0
+    while i < len(addrs_data):
+        addrs.append(make_address(addrs_data[i]))
+        i = i + 1
+    return Employee(d.get_int("id"), d.get_str("name"), addrs)
+
+def unparse_employee(e: Employee) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_int("id", e.id)
+    d.set_str("name", e.name)
+    sub_addrs: list[ValidatedData] = []
+    i: int = 0
+    while i < len(e.addresses):
+        sub_addrs.append(unparse_address(e.addresses[i]))
+        i = i + 1
+    d.set_list_object("addresses", sub_addrs)
+    return d
+
+def make_company(d: ValidatedData) -> Company:
+    emps_data: list[ValidatedData] = d.get_list_object("employees")
+    emps: list[Employee] = []
+    i: int = 0
+    while i < len(emps_data):
+        emps.append(make_employee(emps_data[i]))
+        i = i + 1
+    return Company(d.get_str("name"), emps)
+
+def unparse_company(c: Company) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_str("name", c.name)
+    sub_emps: list[ValidatedData] = []
+    i: int = 0
+    while i < len(c.employees):
+        sub_emps.append(unparse_employee(c.employees[i]))
+        i = i + 1
+    d.set_list_object("employees", sub_emps)
+    return d
+
+company_model: ModelSchema[Company] = ModelSchema[Company](company_schema, make_company)
+company_bi: BidirectionalModel[Company] = BidirectionalModel[Company](company_model, unparse_company)
+
+# -----------------------------------------------------------------------------
+# Scenario 1: Valid Multi-Level Hierarchy Parsing & Hydration
+# -----------------------------------------------------------------------------
+valid_json: str = "{\"name\":\"OmniCorp\",\"employees\":[{\"id\":101,\"name\":\"Alice Smith\",\"addresses\":[{\"city\":\"San Francisco\",\"country\":\"USA\"},{\"city\":\"London\",\"country\":\"UK\"}]},{\"id\":102,\"name\":\"Bob Jones\",\"addresses\":[{\"city\":\"Tokyo\",\"country\":\"Japan\"}]}]}"
+
+res_valid: Result[Company] = company_model.parse_json(valid_json)
+nox.test.assert_true(res_valid.is_ok, "Valid company JSON parses successfully")
+c: Company = res_valid.unwrap()
+nox.test.assert_eq_str(c.name, "OmniCorp", "Company name matches")
+nox.test.assert_eq_int(len(c.employees), 2, "Company has 2 employees")
+
+# Employee 1 checks
+e1: Employee = c.employees[0]
+nox.test.assert_eq_int(e1.id, 101, "e1 id is 101")
+nox.test.assert_eq_str(e1.name, "Alice Smith", "e1 name is Alice Smith")
+nox.test.assert_eq_int(len(e1.addresses), 2, "e1 has 2 addresses")
+nox.test.assert_eq_str(e1.addresses[0].city, "San Francisco", "e1 addr 0 city is SF")
+nox.test.assert_eq_str(e1.addresses[0].country, "USA", "e1 addr 0 country is USA")
+nox.test.assert_eq_str(e1.addresses[1].city, "London", "e1 addr 1 city is London")
+nox.test.assert_eq_str(e1.addresses[1].country, "UK", "e1 addr 1 country is UK")
+
+# Employee 2 checks
+e2: Employee = c.employees[1]
+nox.test.assert_eq_int(e2.id, 102, "e2 id is 102")
+nox.test.assert_eq_str(e2.name, "Bob Jones", "e2 name is Bob Jones")
+nox.test.assert_eq_int(len(e2.addresses), 1, "e2 has 1 address")
+nox.test.assert_eq_str(e2.addresses[0].city, "Tokyo", "e2 addr 0 city is Tokyo")
+
+# -----------------------------------------------------------------------------
+# Scenario 2: Bi-Directional Round-Trip (dump & dump_validated)
+# -----------------------------------------------------------------------------
+dumped_fast: str = company_bi.dump(c)
+dumped_val: str = company_bi.dump_validated(c)
+nox.test.assert_eq_str(dumped_fast, dumped_val, "dump and dump_validated match on nested arrays")
+
+res_roundtrip: Result[Company] = company_model.parse_json(dumped_val)
+nox.test.assert_true(res_roundtrip.is_ok, "Serialized nested array JSON re-parses cleanly")
+c_rt: Company = res_roundtrip.unwrap()
+nox.test.assert_eq_str(c_rt.name, "OmniCorp", "Round-trip company name intact")
+nox.test.assert_eq_int(len(c_rt.employees), 2, "Round-trip employees count intact")
+nox.test.assert_eq_str(c_rt.employees[0].addresses[0].city, "San Francisco", "Round-trip deep nested field intact")
+nox.test.assert_eq_str(c_rt.employees[1].addresses[0].city, "Tokyo", "Round-trip employee 2 address intact")
+
+# -----------------------------------------------------------------------------
+# Scenario 3: Deep Array Error Path Attribution
+# -----------------------------------------------------------------------------
+# Error at employees[1].addresses[0].city (too short: 'T')
+bad_deep_json: str = "{\"name\":\"OmniCorp\",\"employees\":[{\"id\":101,\"name\":\"Alice Smith\",\"addresses\":[{\"city\":\"San Francisco\",\"country\":\"USA\"}]},{\"id\":102,\"name\":\"Bob Jones\",\"addresses\":[{\"city\":\"T\",\"country\":\"Japan\"}]}]}"
+
+res_err1: Result[Company] = company_model.parse_json(bad_deep_json)
+nox.test.assert_true(not res_err1.is_ok, "Deep invalid city rejected")
+nox.test.assert_eq_str(res_err1.errors[0].path, "employees[1].addresses[0].city", "Error path precisely points to deep array element")
+nox.test.assert_eq_str(res_err1.errors[0].code, CODE_STRING_TOO_SHORT, "Error code is string_too_short")
+
+# Error at employees[0].id (out of range: 0)
+bad_id_json: str = "{\"name\":\"OmniCorp\",\"employees\":[{\"id\":0,\"name\":\"Alice Smith\",\"addresses\":[]}]}"
+res_err2: Result[Company] = company_model.parse_json(bad_id_json)
+nox.test.assert_true(not res_err2.is_ok, "Out of range employee id rejected")
+nox.test.assert_eq_str(res_err2.errors[0].path, "employees[0].id", "Error path points to employees[0].id")
+nox.test.assert_eq_str(res_err2.errors[0].code, CODE_OUT_OF_RANGE, "Error code is out_of_range")
+
+# Error where element in addresses array is not an object
+bad_type_json: str = "{\"name\":\"OmniCorp\",\"employees\":[{\"id\":101,\"name\":\"Alice Smith\",\"addresses\":[\"not_an_address_object\"]}]}"
+res_err3: Result[Company] = company_model.parse_json(bad_type_json)
+nox.test.assert_true(not res_err3.is_ok, "Non-object element rejected")
+nox.test.assert_eq_str(res_err3.errors[0].path, "employees[0].addresses[0]", "Error path points to non-object item")
+nox.test.assert_eq_str(res_err3.errors[0].code, CODE_TYPE_MISMATCH, "Error code is type_mismatch")
+
+# -----------------------------------------------------------------------------
+# Scenario 4: Boundary Cases (Empty Arrays)
+# -----------------------------------------------------------------------------
+empty_emps_json: str = "{\"name\":\"Startup Inc\",\"employees\":[]}"
+res_empty: Result[Company] = company_model.parse_json(empty_emps_json)
+nox.test.assert_true(res_empty.is_ok, "Company with empty employees array is valid")
+c_empty: Company = res_empty.unwrap()
+nox.test.assert_eq_int(len(c_empty.employees), 0, "0 employees parsed")
+
+dumped_empty: str = company_bi.dump_validated(c_empty)
+res_re_empty: Result[Company] = company_model.parse_json(dumped_empty)
+nox.test.assert_true(res_re_empty.is_ok, "Empty employees round-trip re-parses cleanly")
+nox.test.assert_eq_int(len(res_re_empty.unwrap().employees), 0, "0 employees re-parsed")
+
+print("nested_array_test passed")

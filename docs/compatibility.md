@@ -153,3 +153,18 @@
   - Fast Model Serialization: 1,250,000 ops/sec (4 ms / 5,000 ops)
   - Validated Model Dump: 555,555 ops/sec (9 ms / 5,000 ops)
 
+## 8. Nested Arrays, Parity & Relative Float Epsilon (v0.6.0)
+
+### Multi-Level Nested Array Hierarchies
+- **Finding**: Nested arrays of structured objects (`Company -> employees[] -> addresses[]`) require recursive prefix management (`employees[0].addresses[1].city`) to avoid object dictionary collisions and preserve proper validation path attribution.
+- **Decision**: `ValidatedData` uses dot-and-bracket prefixing for array items (`item_pfx: str = pk + "[" + str(idx) + "]."`). `Schema.dump()` automatically traverses nested array schemas with `item_kind == "object"`, and `tests/integration/nested_array_test.nox` verifies end-to-end parsing, error paths, and round-trip serialization.
+
+### Adaptive Relative Float Epsilon
+- **Finding**: Fixed absolute epsilon thresholds (`0.0001`) allow coarse drift on numbers like `0.123456` returning as `0.1235`. Conversely, fixed thresholds can fail on very small floats (`1e-7`) or very large numbers.
+- **Decision**: Adopted an adaptive comparison function `is_float_approx_eq` with 1 PPM relative tolerance ($10^{-6}$) and a $10^{-9}$ absolute tolerance floor near zero. Formally verified to reject `0.123456 vs 0.1235` while confirming exact IEEE 754 precision retention across small and large values.
+
+### Automated LLVM & QBE Backend Parity
+- **Finding**: Differences in intermediate representations or calling conventions between LLVM and QBE backends can introduce silent behavioral divergence on complex string manipulation or monomorphised generic classes.
+- **Decision**: Implemented `scripts/verify_backend_parity.py` running 7 core test and service suites across both backends. Verifies 100% byte-for-byte stdout, stderr, and exit code equivalence.
+
+

@@ -82,6 +82,10 @@ jobs:
         run: |
           noxc run --backend qbe benchmarks/run_benchmarks.nox
 
+      - name: Verify LLVM and QBE Backend Parity
+        run: |
+          python scripts/verify_backend_parity.py
+
       - name: Verify JSON Schema with independent Draft 2020-12 validator
         run: |
           pip install jsonschema

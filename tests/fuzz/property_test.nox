@@ -11,6 +11,24 @@ from core import ValidatedData, ValidationResult
 from models import ModelSchema, BidirectionalModel
 
 # -----------------------------------------------------------------------------
+# Precision Helper: Adaptive Relative & Absolute Floating-Point Comparison
+# -----------------------------------------------------------------------------
+def is_float_approx_eq(a: float, b: float) -> bool:
+    diff: float = abs(a - b)
+    # Absolute tolerance floor for numbers near zero
+    if diff <= 0.000000001:
+        return True
+    max_val: float = abs(a)
+    if abs(b) > max_val:
+        max_val = abs(b)
+    # Relative tolerance of 1 part per million (1e-6)
+    return diff <= (0.000001 * max_val)
+
+# Verify adaptive epsilon rejects coarse drift
+nox.test.assert_true(is_float_approx_eq(0.123456, 0.123456), "Exact float matches")
+nox.test.assert_true(not is_float_approx_eq(0.123456, 0.1235), "Coarse drift is strictly rejected")
+
+# -----------------------------------------------------------------------------
 # Model 1: SensorRecord (Combinatorial Flat Model)
 # -----------------------------------------------------------------------------
 class SensorRecord:
@@ -103,9 +121,8 @@ while note_mode < 2:
                     nox.test.assert_eq_str(parsed_res.data.get_str("tag"), cur_tag, "tag preserved in round-trip")
                     nox.test.assert_true(parsed_res.data.get_bool("active") == cur_act, "active preserved in round-trip")
 
-                    # Exact field verification for ratio (float precision within epsilon)
-                    diff_ratio: float = abs(parsed_res.data.get_float("ratio") - cur_rat)
-                    nox.test.assert_true(diff_ratio < 0.0001, "ratio preserved in round-trip")
+                    # Exact field verification for ratio (adaptive relative float precision)
+                    nox.test.assert_true(is_float_approx_eq(parsed_res.data.get_float("ratio"), cur_rat), "ratio preserved with adaptive relative precision")
 
                     # Exact field verification for notes (nullable vs string)
                     if cur_note is None:
@@ -157,7 +174,7 @@ while br_i < len(bad_ratios):
     br_i = br_i + 1
 
 # -----------------------------------------------------------------------------
-# Invariant Property 3: Unicode & JSON Escaping String Round-Trip Preservation
+# Invariant Property 3: Unicode, Control & Long String Round-Trip Preservation
 # -----------------------------------------------------------------------------
 class TextRecord:
     id: int
@@ -183,6 +200,14 @@ text_schema.field_str("content")
 text_model: ModelSchema[TextRecord] = ModelSchema[TextRecord](text_schema, make_text_record)
 text_bi: BidirectionalModel[TextRecord] = BidirectionalModel[TextRecord](text_model, unparse_text_record)
 
+# Build a 5,000-character multi-byte UTF-8 string to test buffer management
+long_chunk: str = "Noxen-Türkçe-🚀-2026-"
+long_buf: str = ""
+li: int = 0
+while li < 250:
+    long_buf = long_buf + long_chunk
+    li = li + 1
+
 unicode_test_strings: list[str] = [
     "Türkçe karakter seti: çğıöşü ÇĞİÖŞÜ",
     "International: España, München, Zürich, Tokyo 東京, Seoul 서울",
@@ -190,9 +215,12 @@ unicode_test_strings: list[str] = [
     "Emoji sequences: 🚀 🔥 ⚡ 🎯 💻 📦 ✨ 🎉",
     "Quotes and Backslashes: \"quoted text\" and \\backslash\\ path",
     "Newlines and Tabs: Line 1\nLine 2\tTabbed\rCarriage",
+    "Control characters: \b backspace and \f formfeed",
+    "Combining Unicode: e\u0301 (é) and a\u0308 (ä)",
     "Code snippets: <script>alert('xss')</script> and SELECT * FROM users;",
     "",
-    "   leading and trailing spaces   "
+    "   leading and trailing spaces   ",
+    long_buf
 ]
 
 ut_i: int = 0
@@ -216,7 +244,7 @@ while ut_i < len(unicode_test_strings):
     ut_i = ut_i + 1
 
 # -----------------------------------------------------------------------------
-# Invariant Property 4: Float Precision and Scientific Representation Round-Trip
+# Invariant Property 4: Adaptive Float Precision and Boundary Round-Trip
 # -----------------------------------------------------------------------------
 class MeasurementRecord:
     reading: float
@@ -238,7 +266,9 @@ meas_schema.field_float("reading")
 meas_model: ModelSchema[MeasurementRecord] = ModelSchema[MeasurementRecord](meas_schema, make_measurement)
 meas_bi: BidirectionalModel[MeasurementRecord] = BidirectionalModel[MeasurementRecord](meas_model, unparse_measurement)
 
-float_test_vals: list[float] = [0.0, 1.0, 0.5, 0.00001, 0.99999, 0.123456, 12345.6789, -42.5]
+float_test_vals: list[float] = [
+    0.0, 1.0, 0.5, 0.25, 0.75, 0.00001, 0.99999, 0.123456, 12345.6789, -42.5, 0.0000001, 1234567.890123
+]
 flt_i: int = 0
 while flt_i < len(float_test_vals):
     expected_f: float = float_test_vals[flt_i]
@@ -246,8 +276,8 @@ while flt_i < len(float_test_vals):
     d_f: str = meas_bi.dump_validated(mr)
     p_f: ValidationResult = meas_schema.validate_json(d_f)
     nox.test.assert_true(p_f.is_valid, "Float re-validates cleanly")
-    diff_f: float = abs(p_f.data.get_float("reading") - expected_f)
-    nox.test.assert_true(diff_f < 0.0001, "Float value preserved within epsilon")
+    actual_f: float = p_f.data.get_float("reading")
+    nox.test.assert_true(is_float_approx_eq(actual_f, expected_f), "Float preserved with adaptive relative precision")
     flt_i = flt_i + 1
 
 # -----------------------------------------------------------------------------
@@ -346,7 +376,88 @@ while hw_i < len(hw_permutations):
     hw_i = hw_i + 1
 
 # -----------------------------------------------------------------------------
-# Invariant Property 6: Additional Adversarial JSON Payloads
+# Invariant Property 6: Multi-Level Nested Array Hierarchy Round-Trip
+# -----------------------------------------------------------------------------
+class GeoLocation:
+    city: str
+    country: str
+
+    def __init__(self, city: str, country: str) -> None:
+        self.city = city
+        self.country = country
+
+class ServerNode:
+    node_id: int
+    locations: list[GeoLocation]
+
+    def __init__(self, node_id: int, locations: list[GeoLocation]) -> None:
+        self.node_id = node_id
+        self.locations = locations
+
+class Cluster:
+    name: str
+    nodes: list[ServerNode]
+
+    def __init__(self, name: str, nodes: list[ServerNode]) -> None:
+        self.name = name
+        self.nodes = nodes
+
+geo_s: Schema = Schema("GeoLocation")
+geo_s.field_str("city").min_length(2)
+geo_s.field_str("country").min_length(2)
+
+node_s: Schema = Schema("ServerNode")
+node_s.field_int("node_id").min_i(1)
+node_s.field_list_schema("locations", geo_s)
+
+cluster_s: Schema = Schema("Cluster")
+cluster_s.field_str("name").min_length(2)
+cluster_s.field_list_schema("nodes", node_s)
+
+def make_geo(d: ValidatedData) -> GeoLocation:
+    return GeoLocation(d.get_str("city"), d.get_str("country"))
+
+def make_node(d: ValidatedData) -> ServerNode:
+    loc_vds: list[ValidatedData] = d.get_list_object("locations")
+    locs: list[GeoLocation] = []
+    i: int = 0
+    while i < len(loc_vds):
+        locs.append(make_geo(loc_vds[i]))
+        i = i + 1
+    return ServerNode(d.get_int("node_id"), locs)
+
+def make_cluster(d: ValidatedData) -> Cluster:
+    node_vds: list[ValidatedData] = d.get_list_object("nodes")
+    nds: list[ServerNode] = []
+    i: int = 0
+    while i < len(node_vds):
+        nds.append(make_node(node_vds[i]))
+        i = i + 1
+    return Cluster(d.get_str("name"), nds)
+
+# Test multi-level array round trip
+cluster_json: str = "{\"name\":\"GlobalEdge\",\"nodes\":[{\"node_id\":1,\"locations\":[{\"city\":\"Frankfurt\",\"country\":\"DE\"},{\"city\":\"Amsterdam\",\"country\":\"NL\"}]},{\"node_id\":2,\"locations\":[{\"city\":\"Tokyo\",\"country\":\"JP\"}]}]}"
+
+vr_cl: ValidationResult = cluster_s.validate_json(cluster_json)
+nox.test.assert_true(vr_cl.is_valid, "Multi-level array JSON validates cleanly")
+cl_obj: Cluster = make_cluster(vr_cl.data)
+nox.test.assert_eq_str(cl_obj.name, "GlobalEdge", "Cluster name preserved")
+nox.test.assert_eq_int(len(cl_obj.nodes), 2, "Cluster has 2 nodes")
+nox.test.assert_eq_int(len(cl_obj.nodes[0].locations), 2, "Node 0 has 2 locations")
+nox.test.assert_eq_str(cl_obj.nodes[0].locations[0].city, "Frankfurt", "Node 0 Loc 0 city is Frankfurt")
+nox.test.assert_eq_str(cl_obj.nodes[1].locations[0].city, "Tokyo", "Node 1 Loc 0 city is Tokyo")
+
+# Dump cluster data and revalidate
+dumped_cl: str = cluster_s.dump_validated(vr_cl.data)
+vr_cl_re: ValidationResult = cluster_s.validate_json(dumped_cl)
+nox.test.assert_true(vr_cl_re.is_valid, "Dumped cluster re-validates cleanly")
+cl_obj_re: Cluster = make_cluster(vr_cl_re.data)
+nox.test.assert_eq_str(cl_obj_re.name, "GlobalEdge", "Re-validated cluster name preserved")
+nox.test.assert_eq_int(len(cl_obj_re.nodes), 2, "Re-validated cluster has 2 nodes")
+nox.test.assert_eq_str(cl_obj_re.nodes[0].locations[1].city, "Amsterdam", "Nested location intact")
+
+# -----------------------------------------------------------------------------
+# Invariant Property 7: Additional Adversarial JSON Payloads
 # -----------------------------------------------------------------------------
 # 1. Type mismatch (string passed for integer id)
 bad_type_json: str = "{\"id\": \"not_an_int\", \"ratio\": 0.5, \"tag\": \"alpha\", \"active\": true, \"notes\": null}"
@@ -372,4 +483,10 @@ res_extra: ValidationResult = sensor_schema.validate_json(unexpected_json)
 nox.test.assert_true(not res_extra.is_valid, "Unexpected extra field rejected under FORBID")
 nox.test.assert_eq_str(res_extra.errors[0].path, "malicious_extra", "Error on extra field path")
 
-print("property_test passed (192 valid Cartesian + 9 Unicode + 8 Float + 3 Nested + 17 Adversarial permutations)")
+# 5. Nested array element constraint violation with exact path attribution
+bad_nested_arr_json: str = "{\"name\":\"GlobalEdge\",\"nodes\":[{\"node_id\":1,\"locations\":[{\"city\":\"F\",\"country\":\"DE\"}]}]}"
+res_bad_nested: ValidationResult = cluster_s.validate_json(bad_nested_arr_json)
+nox.test.assert_true(not res_bad_nested.is_valid, "Nested array constraint violation rejected")
+nox.test.assert_eq_str(res_bad_nested.errors[0].path, "nodes[0].locations[0].city", "Error accurately attributed to deep array path")
+
+print("property_test passed (192 valid Cartesian + 12 Unicode + 12 Float + 3 Nested Models + 2 Nested Array Hierarchies + 18 Adversarial permutations)")

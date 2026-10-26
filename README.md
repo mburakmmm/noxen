@@ -54,7 +54,7 @@
 * **Strict by Default**: Extra fields are rejected by default (`POLICY_FORBID`), and implicit type coercions are disallowed in strict mode.
 * **O(1) Serializer Key Collision Protection**: `Serializer` tracks written property keys using a hash set, ensuring $O(N)$ total complexity and preventing duplicate JSON keys.
 * **Output Re-validation**: Separate high-speed direct dump path (1.25M ops/sec) from verified output re-validation (`dump_validated()`) with IEEE 754 precision boundary checks.
-* **Nested Models & Collections**: Validate deeply nested objects and arrays with clear dot-and-index error paths (`user.profile.website`, `items[0].id`).
+* **Nested Models & Multi-Level Arrays**: Validate deeply nested objects and array hierarchies (`Company -> employees[] -> addresses[]`) with pinpoint dot-and-index error paths (`employees[1].addresses[0].city`).
 * **Precise Nullability vs Optionality**: Clean distinction between missing keys, explicit nulls, and default fallbacks across 4 distinct presence modes.
 * **Format Validators**: Out-of-the-box email, URL (via `nox.url`), and UUID validation.
 * **Allowed Choices & Enumerations**: `in_choices` for strings and `in_choices_int` for numeric literals.
@@ -62,8 +62,9 @@
 * **Resource & Recursion Limits**: Defend against adversarial payloads with configurable `max_depth` (default 32) and `max_errors` (default 50).
 * **Cross-Field Custom Validators**: Register custom callback functions for domain business logic validation.
 * **JSON Serialization**: High-performance serialization from typed model instances back to JSON with `Serializer`.
-* **JSON Schema Generation**: Export schemas directly to standard JSON Schema Draft 2020-12 specifications with 100% differential testing agreement against Python `jsonschema`.
+* **JSON Schema Generation**: Export schemas directly to standard JSON Schema Draft 2020-12 specifications with 100% agreement across currently implemented differential test scenarios against Python's official Draft 2020-12 validator.
 * **Native Aether & Nyx Adapters**: Ready-to-use HTTP response generators (`json_422`, `json_200`, `json_201`) and database row hydration (`DbAdapter[T]`, `row_to_validated_data`).
+* **Dual-Backend Parity (LLVM & QBE)**: Fully tested and verified across both compiler code generation backends with byte-for-byte output equivalence.
 
 ---
 
@@ -87,7 +88,7 @@ Add Noxen to your project's `nox.json`:
     {
       "alias": "noxen",
       "repo": "github.com/mburakmmm/noxen",
-      "ref": "v0.5.3"
+      "ref": "v0.6.0"
     }
   ]
 }
@@ -102,7 +103,7 @@ noxc fetch
 Or install via `noxc`:
 
 ```sh
-noxc add noxen github.com/mburakmmm/noxen --ref v0.5.3
+noxc add noxen github.com/mburakmmm/noxen --ref v0.6.0
 ```
 
 ---
@@ -339,21 +340,25 @@ print(schema_json)
 
 ## Benchmarks
 
-Measured on Apple Silicon ARM64 using standard release compiler:
+Benchmarked on Apple Silicon (macOS, M-series ARM64) with **`noxc 2.0.27`** using 5,000 operations per benchmark, a 500-iteration warmup phase, 3 trials with median calculation (`median3`), and checksum accumulators to prevent compiler dead code elimination:
 
-| Operation | Iterations | Time (ms) | Throughput |
-|---|---|---|---|
-| **Flat Model Parsing** | 5,000 | ~10 ms | **~500,000 ops/sec** (~2.0 µs/op) |
-| **Nested Model Parsing** | 5,000 | ~12 ms | **~416,000 ops/sec** (~2.4 µs/op) |
-| **Invalid Payload Rejection** | 5,000 | ~7 ms | **~714,000 ops/sec** (~1.4 µs/op) |
-| **Full JSON Round-Trip** | 5,000 | ~9 ms | **~555,000 ops/sec** (~1.8 µs/op) |
-| **Deep Hierarchy Parsing (3-Level)** | 5,000 | ~14 ms | **~357,000 ops/sec** (~2.8 µs/op) |
-| **Fast Model Dump (`dump`)** | 5,000 | ~4 ms | **~1,250,000 ops/sec** (~0.8 µs/op) |
-| **Validated Model Dump (`dump_validated`)** | 5,000 | ~9 ms | **~555,000 ops/sec** (~1.8 µs/op) |
+| Operation | Iterations | LLVM Throughput | QBE Throughput | LLVM Latency |
+|---|---|---|---|---|
+| **Flat Model Parsing** | 5,000 | **625,000 ops/sec** (8 ms) | **555,555 ops/sec** (9 ms) | ~1.6 µs/op |
+| **Nested Model Parsing** | 5,000 | **555,555 ops/sec** (9 ms) | **500,000 ops/sec** (10 ms) | ~1.8 µs/op |
+| **Invalid Payload Rejection** | 5,000 | **1,000,000 ops/sec** (5 ms) | **1,000,000 ops/sec** (5 ms) | ~1.0 µs/op |
+| **Full JSON Round-Trip** | 5,000 | **714,285 ops/sec** (7 ms) | **625,000 ops/sec** (8 ms) | ~1.4 µs/op |
+| **Deep Hierarchy Parsing (3-Level)** | 5,000 | **454,545 ops/sec** (11 ms) | **384,615 ops/sec** (13 ms) | ~2.2 µs/op |
+| **Fast Model Dump (`dump`)** | 5,000 | **1,250,000 ops/sec** (4 ms) | **1,250,000 ops/sec** (4 ms) | ~0.8 µs/op |
+| **Validated Model Dump (`dump_validated`)** | 5,000 | **625,000 ops/sec** (8 ms) | **555,555 ops/sec** (9 ms) | ~1.6 µs/op |
 
-Run the benchmarks yourself:
+Run the benchmarks yourself with either compiler backend:
 ```sh
-noxc run benchmarks/run_benchmarks.nox
+# LLVM backend (default)
+noxc run --backend llvm benchmarks/run_benchmarks.nox
+
+# QBE backend
+noxc run --backend qbe benchmarks/run_benchmarks.nox
 ```
 
 ---
@@ -362,7 +367,7 @@ noxc run benchmarks/run_benchmarks.nox
 
 | Feature | Status | Notes |
 |---|---|---|
-| Primitive types (`string`, `int`, `float`, `bool`) | Supported | Strict validation, int precision checks |
+| Primitive types (`string`, `int`, `float`, `bool`) | Supported | Strict validation, int precision checks, adaptive relative float epsilon |
 | Optional vs Nullable fields | Supported | 4 presence modes (`REQUIRED`, `REQUIRED_NULLABLE`, `OPTIONAL`, `OPTIONAL_NULLABLE`) |
 | Default values | Supported | Applied only on missing fields |
 | Format validation | Supported | Email, URL (`nox.url`), UUID, Date, Time, Datetime |
@@ -372,6 +377,9 @@ noxc run benchmarks/run_benchmarks.nox
 | Numeric bounds | Supported | `min`, `max`, `ge`, `le`, `gt`, `lt` |
 | Choices & Enums | Supported | `in_choices` (strings), `in_choices_int` (integers) |
 | Field Aliases | Supported | `.alias("json_key")` |
+| Nested Objects | Supported | `.field_object("address", addr_schema)` |
+| Multi-Level Nested Arrays | Supported | `.field_list_schema("employees", emp_schema)` with deep dot-and-index error paths |
+| Dual-Backend Parity | Supported | 100% byte-for-byte parity verified across LLVM and QBE |
 | Array Bounds | Supported | `min_items`, `max_items` |
 | Nested models (`object`) | Supported | Full recursive path validation with `max_depth` caps |
 | Arrays / Collections | Supported | Lists of primitives and lists of objects |

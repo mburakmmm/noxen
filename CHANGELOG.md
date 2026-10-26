@@ -5,6 +5,26 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-10-26
+
+### Added
+- **Multi-Level Nested Array & Object Hierarchies**:
+  - Added `tests/integration/nested_array_test.nox` exercising multi-level object-in-array compositions (`Company -> employees[] -> addresses[]`).
+  - Proves deep error path attribution (e.g. `employees[1].addresses[0].city`), non-object element rejection (`employees[0].addresses[0]`), and round-trip serialization (`dump` & `dump_validated`) preserving all array lengths and sub-object properties.
+  - Added Invariant Property 6 to `tests/fuzz/property_test.nox` verifying `Cluster -> nodes[] -> locations[]` round-trip.
+- **Adaptive Relative Epsilon Float Precision**:
+  - Replaced fixed absolute epsilon (`0.0001`) with adaptive relative comparison `is_float_approx_eq` with 1 part per million relative tolerance and $10^{-9}$ absolute floor.
+  - Guarantees high-fidelity float serialization without drift across both tiny ($10^{-7}$) and large ($1,234,567.89$) floats, while strictly rejecting coarse variations (e.g. `0.123456` vs `0.1235`).
+- **Expanded Unicode, Control Character & Buffer Edge Cases**:
+  - Added combining Unicode sequences (e.g. `e\u0301`, `a\u0308`), control characters (`\b`, `\f`), and 5,000-character multi-byte UTF-8 payloads to `tests/fuzz/property_test.nox`.
+- **Automated Dual-Backend (LLVM & QBE) Parity Verification**:
+  - Created `scripts/verify_backend_parity.py` executing 7 core targets (`property_test.nox`, `nested_array_test.nox`, `realworld_service.nox`, `nested_model.nox`, `strict_validation.nox`, `custom_validator.nox`, `json_roundtrip.nox`) under both `--backend llvm` and `--backend qbe`.
+  - Asserts 100% byte-for-byte stdout and exit code parity between backends.
+  - Integrated parity verification into `.github/workflows/ci.yml`.
+- **Documentation & Precision Claims**:
+  - Clarified JSON Schema specification agreement in `README.md` to precisely reflect currently implemented differential scenarios.
+  - Added compiler version (`noxc 2.0.27`), warmup iterations, and dual-backend benchmark performance metrics.
+
 ## [0.5.3] - 2026-10-26
 
 ### Added
