@@ -97,27 +97,26 @@ create_model: ModelSchema[CreateProductDto] = ModelSchema[CreateProductDto](crea
 # 3. Service Layer with In-Memory SQLite Database
 class ProductService:
     conn: Connection
-    next_id: int
 
     def __init__(self) -> None:
         self.conn = nox.sqlite.open(":memory:")
-        self.conn.execute("CREATE TABLE products (id INTEGER PRIMARY KEY, sku TEXT, name TEXT, price_cents INT, in_stock INT)")
-        self.next_id = 1
+        # Native SQLite AUTOINCREMENT manages primary key generation without application-level counters
+        self.conn.execute("CREATE TABLE products (id INTEGER PRIMARY KEY AUTOINCREMENT, sku TEXT, name TEXT, price_cents INT, in_stock INT)")
 
     def insert(self, sku: str, name: str, price_cents: int, in_stock: bool) -> Product:
-        pid: int = self.next_id
-        self.next_id = self.next_id + 1
         stock_int: int = 0
         if in_stock:
             stock_int = 1
-        # Parametrized SQL statement prevents SQL injection and safely handles apostrophes / quotes
-        stmt: Statement = self.conn.prepare("INSERT INTO products VALUES (?, ?, ?, ?, ?)")
-        stmt.bind_int(0, pid)
-        stmt.bind_str(1, sku)
-        stmt.bind_str(2, name)
-        stmt.bind_int(3, price_cents)
-        stmt.bind_int(4, stock_int)
+        # Parametrized SQL statement prevents SQL injection and safely handles apostrophes, quotes & attack payloads
+        stmt: Statement = self.conn.prepare("INSERT INTO products (sku, name, price_cents, in_stock) VALUES (?, ?, ?, ?)")
+        stmt.bind_str(0, sku)
+        stmt.bind_str(1, name)
+        stmt.bind_int(2, price_cents)
+        stmt.bind_int(3, stock_int)
         stmt.execute()
+
+        # Retrieve the database-assigned AUTOINCREMENT primary key safely
+        pid: int = self.conn.last_insert_rowid()
         return Product(pid, sku, name, price_cents, in_stock)
 
     def find_by_id(self, pid: int) -> Product | None:
@@ -217,5 +216,26 @@ nox.test.assert_eq_int(201, quote_resp.status, "POST product with apostrophe ret
 get3_resp: HttpResponse = handle_get_product(3)
 nox.test.assert_eq_int(200, get3_resp.status, "GET 3 returns HTTP 200")
 nox.test.assert_true(nox.strings.contains(get3_resp.body, "Developer's Precision Desk Mat"), "Product with apostrophe stored and retrieved safely")
+
+# Scenario F: Adversarial SQL Injection Attack Payloads
+print("\n[Scenario 6] POST /api/products (Adversarial SQL Injection Attack Payloads)")
+# Malicious payload designed to close string literal, inject DROP TABLE statement and comment out remaining SQL
+attack_name: str = "Pwned'); DROP TABLE products; --"
+attack_json: str = "{\"sku\":\"INJ-DROP-01\",\"name\":\"Pwned'); DROP TABLE products; --\",\"price_cents\":4999,\"in_stock\":true}"
+attack_req: HttpRequest = HttpRequest("POST", "/api/products", attack_json, {}, "127.0.0.1")
+attack_resp: HttpResponse = handle_create_product(attack_req)
+print("HTTP Status:", attack_resp.status)
+print("Response JSON:", attack_resp.body)
+nox.test.assert_eq_int(201, attack_resp.status, "Attack payload accepted safely as string literal without executing injected SQL")
+
+# Verify products table is completely intact and was NOT dropped
+rows_count: list[Row] = service.conn.query("SELECT COUNT(*) FROM products")
+nox.test.assert_true(len(rows_count) > 0, "Products table remains fully intact")
+nox.test.assert_true(rows_count[0].get_int(0) >= 4, "Total products count is at least 4 (seed + ok + quote + injection)")
+
+# Verify attack string was stored literally in database and retrieved safely
+get4_resp: HttpResponse = handle_get_product(4)
+nox.test.assert_eq_int(200, get4_resp.status, "GET 4 returns HTTP 200")
+nox.test.assert_true(nox.strings.contains(get4_resp.body, "Pwned'); DROP TABLE products; --"), "Injected SQL string retrieved literally as product name without execution")
 
 print("\nAll Real-World Service scenarios executed and verified successfully!")

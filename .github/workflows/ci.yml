@@ -61,10 +61,16 @@ jobs:
           noxc run examples/custom_validator.nox
           noxc run examples/aether_server.nox
           noxc run examples/nyx_crud.nox
+          noxc run examples/realworld_service.nox
 
-      - name: Run benchmarks
+      - name: Run benchmarks (LLVM backend)
         run: |
-          noxc run benchmarks/run_benchmarks.nox
+          noxc run --backend llvm benchmarks/run_benchmarks.nox
+
+      - name: Run benchmarks (QBE backend)
+        if: runner.os != 'Windows'
+        run: |
+          noxc run --backend qbe benchmarks/run_benchmarks.nox
 
       - name: Verify JSON Schema with independent Draft 2020-12 validator
         run: |

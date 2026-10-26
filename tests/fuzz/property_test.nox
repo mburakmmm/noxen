@@ -1,0 +1,143 @@
+# tests/fuzz/property_test.nox
+# Property-based combinatorial invariant tests for Noxen.
+
+import nox.test
+import schema
+import core
+import models
+import serialization
+from schema import Schema
+from core import ValidatedData, ValidationResult
+from models import ModelSchema, BidirectionalModel
+
+class SensorRecord:
+    id: int
+    ratio: float
+    tag: str
+    active: bool
+    notes: str | None
+
+    def __init__(self, id: int, ratio: float, tag: str, active: bool, notes: str | None) -> None:
+        self.id = id
+        self.ratio = ratio
+        self.tag = tag
+        self.active = active
+        self.notes = notes
+
+def make_sensor(d: ValidatedData) -> SensorRecord:
+    return SensorRecord(
+        d.get_int("id"),
+        d.get_float("ratio"),
+        d.get_str("tag"),
+        d.get_bool("active"),
+        d.get_opt_str("notes")
+    )
+
+def unparse_sensor(s: SensorRecord) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_int("id", s.id)
+    d.set_float("ratio", s.ratio)
+    d.set_str("tag", s.tag)
+    d.set_bool("active", s.active)
+    d.set_opt_str("notes", s.notes)
+    return d
+
+# Define Schema with numeric, choice, boolean and nullable constraints
+sensor_schema: Schema = Schema("SensorRecord")
+sensor_schema.field_int("id").min_i(1).max_i(1000)
+sensor_schema.field_float("ratio").min(0.0).max(1.0)
+sensor_schema.field_str("tag").in_choices(["alpha", "beta", "gamma"])
+sensor_schema.field_bool("active")
+sensor_schema.field_str("notes").optional().nullable()
+
+sensor_model: ModelSchema[SensorRecord] = ModelSchema[SensorRecord](sensor_schema, make_sensor)
+sensor_bi: BidirectionalModel[SensorRecord] = BidirectionalModel[SensorRecord](sensor_model, unparse_sensor)
+
+# Invariant Property 1: Round-trip preservation across combinatorial valid states
+valid_ids: list[int] = [1, 50, 500, 1000]
+valid_ratios: list[float] = [0.0, 0.25, 0.75, 1.0]
+valid_tags: list[str] = ["alpha", "beta", "gamma"]
+valid_actives: list[bool] = [True, False]
+
+comb_count: int = 0
+
+# Test both nullable (None) and non-null note strings across all Cartesian products
+note_mode: int = 0
+while note_mode < 2:
+    cur_note: str | None = None
+    if note_mode == 1:
+        cur_note = "Normal sensor reading"
+
+    i_id: int = 0
+    while i_id < len(valid_ids):
+        cur_id: int = valid_ids[i_id]
+        i_rat: int = 0
+        while i_rat < len(valid_ratios):
+            cur_rat: float = valid_ratios[i_rat]
+            i_tag: int = 0
+            while i_tag < len(valid_tags):
+                cur_tag: str = valid_tags[i_tag]
+                i_act: int = 0
+                while i_act < len(valid_actives):
+                    cur_act: bool = valid_actives[i_act]
+
+                    # Construct model instance
+                    sr: SensorRecord = SensorRecord(cur_id, cur_rat, cur_tag, cur_act, cur_note)
+
+                    # Property 1a: validate_model returns True
+                    vr: ValidationResult = sensor_bi.validate_model(sr)
+                    nox.test.assert_true(vr.is_valid, "Valid combination passes validate_model")
+
+                    # Property 1b: dump and dump_validated produce identical JSON
+                    dumped_fast: str = sensor_bi.dump(sr)
+                    dumped_val: str = sensor_bi.dump_validated(sr)
+                    nox.test.assert_eq_str(dumped_fast, dumped_val, "dump and dump_validated match on valid data")
+
+                    # Property 1c: JSON round-trip re-parses to identical values
+                    parsed_res: ValidationResult = sensor_schema.validate_json(dumped_val)
+                    nox.test.assert_true(parsed_res.is_valid, "Serialized JSON re-validates cleanly")
+                    nox.test.assert_eq_int(parsed_res.data.get_int("id"), cur_id, "id preserved in round-trip")
+                    nox.test.assert_eq_str(parsed_res.data.get_str("tag"), cur_tag, "tag preserved in round-trip")
+                    nox.test.assert_true(parsed_res.data.get_bool("active") == cur_act, "active preserved in round-trip")
+
+                    comb_count = comb_count + 1
+                    i_act = i_act + 1
+                i_tag = i_tag + 1
+            i_rat = i_rat + 1
+        i_id = i_id + 1
+    note_mode = note_mode + 1
+
+nox.test.assert_true(comb_count == 192, "Tested 192 valid combinatorial states")
+
+# Invariant Property 2: Soundness — Constraint violation always detected at exact path
+# Test out-of-range IDs
+bad_ids: list[int] = [0, -1, -999, 1001, 9999]
+bi_i: int = 0
+while bi_i < len(bad_ids):
+    bad_sr_id: SensorRecord = SensorRecord(bad_ids[bi_i], 0.5, "alpha", True, None)
+    v_bad_id: ValidationResult = sensor_bi.validate_model(bad_sr_id)
+    nox.test.assert_true(not v_bad_id.is_valid, "Out-of-range id rejected")
+    nox.test.assert_eq_str(v_bad_id.errors[0].path, "id", "Error attributed to id")
+    bi_i = bi_i + 1
+
+# Test invalid tags (disallowed choices)
+bad_tags: list[str] = ["delta", "omega", "", "ALPHA"]
+bt_i: int = 0
+while bt_i < len(bad_tags):
+    bad_sr_tag: SensorRecord = SensorRecord(10, 0.5, bad_tags[bt_i], True, None)
+    v_bad_tag: ValidationResult = sensor_bi.validate_model(bad_sr_tag)
+    nox.test.assert_true(not v_bad_tag.is_valid, "Disallowed tag rejected")
+    nox.test.assert_eq_str(v_bad_tag.errors[0].path, "tag", "Error attributed to tag")
+    bt_i = bt_i + 1
+
+# Test out-of-range ratios
+bad_ratios: list[float] = [-0.1, -1.0, 1.01, 5.5]
+br_i: int = 0
+while br_i < len(bad_ratios):
+    bad_sr_rat: SensorRecord = SensorRecord(10, bad_ratios[br_i], "alpha", True, None)
+    v_bad_rat: ValidationResult = sensor_bi.validate_model(bad_sr_rat)
+    nox.test.assert_true(not v_bad_rat.is_valid, "Out-of-range ratio rejected")
+    nox.test.assert_eq_str(v_bad_rat.errors[0].path, "ratio", "Error attributed to ratio")
+    br_i = br_i + 1
+
+print("property_test passed (192 valid Cartesian + 13 adversarial permutations)")

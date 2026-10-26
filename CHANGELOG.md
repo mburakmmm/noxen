@@ -5,6 +5,22 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-10-26
+
+### Added
+- **Database-Managed AUTOINCREMENT Primary Keys**:
+  - Replaced manual application-level `self.next_id = self.next_id + 1` in `ProductService` (`examples/realworld_service.nox`) with native SQLite `AUTOINCREMENT` primary key generation.
+  - Used `self.conn.last_insert_rowid()` to atomically fetch newly assigned primary keys, eliminating race conditions in concurrent request handling.
+- **Adversarial SQL Injection Attack Payloads**:
+  - Added Scenario 6 in `examples/realworld_service.nox` executing hostile SQL injection payloads (e.g. `Pwned'); DROP TABLE products; --`).
+  - Proves that parametrized `Statement` treat attacks strictly as literal string values: the `products` table remains intact, zero secondary SQL executes, and the malicious string is preserved verbatim.
+- **Property-Based Combinatorial Invariant Testing**:
+  - Added `tests/fuzz/property_test.nox` testing 192 valid Cartesian product states (combining integer bounds, floating point ratios, string choices, booleans, and nulls/non-null optionals) plus 13 adversarial boundary permutations.
+  - Formally proves round-trip preservation, mathematical soundness, error attribution, and `dump_validated` idempotence.
+- **Dual-Backend (LLVM & QBE) Benchmark Verification & CI Integration**:
+  - Added `examples/realworld_service.nox` to `.github/workflows/ci.yml` runner matrix.
+  - Added dual-backend benchmark steps exercising both `--backend llvm` and `--backend qbe`.
+
 ## [0.5.1] - 2026-10-26
 
 ### Added
