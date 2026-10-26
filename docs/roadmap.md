@@ -24,20 +24,28 @@ This document tracks the phased development and future releases of **Noxen**.
 * [x] Coercion modes (`COERCION_STRICT` vs `COERCION_LAX`).
 * [x] Benchmarks suite (640k - 1M+ ops/sec).
 
-### Phase 4 — Security Hardening & Constraints (`v0.3.0`)
+### Phase 4 — Security Hardening & Constraints (`v0.3.0` – `v0.7.2`)
 * [x] ISO 8601 Date, Time, and Datetime validators (`.date()`, `.time()`, `.datetime()`).
 * [x] Sensitive field masking and redaction (`.secret()`).
 * [x] Unknown fields preservation policy (`POLICY_ALLOW`).
 * [x] JSON Schema Draft 2020-12 reusable definitions with `$defs` and `$ref`.
 * [x] Adversarial fuzz and boundary test suite (`tests/fuzz/fuzz_test.nox`).
+* [x] Bidirectional model serialization (`BidirectionalModel[T]`).
+* [x] Automatic schema derivation via `auto_schema("ClassName")` using `nox.reflect`.
+* [x] Strict RFC 8259 non-finite float serialization rejection (`NaN`, `Infinity`, `-Infinity`).
+* [x] Serializer internal state non-mutation on failed validations (`_record_key` deferred until validation succeeds).
+* [x] Exact IEEE 754 negative zero (`-0.0`) sign preservation across JSON serialization and round-trip re-parsing.
+* [x] Cycle & recursion detection in schema derivation (`ValueError` on self-referential models).
+* [x] Dual-backend (LLVM vs QBE) verification with 100% structured semantic parity markers across all 10 targets.
+* [x] Complete cross-platform CI matrix on Ubuntu, macOS, and Windows.
 
 ---
 
 ## Future Roadmap (v1.0 & Beyond)
 
+* [ ] **Recursive & Self-Referential Model Support (Post-1.0)**:
+  - Full support for recursive/cyclic data structures (e.g., category trees, organization charts, comment hierarchies) via JSON Schema Draft 2020-12 `$defs` and `$ref` lazy pointer resolution once runtime ref resolution mechanisms are finalized.
 * [ ] **Aura Framework UI Integration**:
   - Direct form state binding and input field validation helpers for Aura web components.
-* [ ] **Custom Error Message Formatting**:
+* [ ] **Custom Error Message Formatting & Localization**:
   - Configurable error message templates and localization hooks (e.g. English, Turkish, Spanish).
-* [ ] **Cross-Platform CI Expansion**:
-  - Automated Windows Runner matrix and QBE backend validation.

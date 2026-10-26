@@ -19,43 +19,43 @@ import subprocess
 TARGETS = [
     {
         "path": "tests/unit/auto_schema_test.nox",
-        "has_structured_marker": True,
+        "expected_markers": 1,
     },
     {
         "path": "tests/unit/float_edge_cases_test.nox",
-        "has_structured_marker": True,
+        "expected_markers": 1,
     },
     {
         "path": "tests/fuzz/property_test.nox",
-        "has_structured_marker": False,
+        "expected_markers": 1,
     },
     {
         "path": "tests/integration/nested_array_test.nox",
-        "has_structured_marker": True,
+        "expected_markers": 1,
     },
     {
         "path": "examples/auto_model.nox",
-        "has_structured_marker": True,
+        "expected_markers": 1,
     },
     {
         "path": "examples/realworld_service.nox",
-        "has_structured_marker": False,
+        "expected_markers": 1,
     },
     {
         "path": "examples/nested_model.nox",
-        "has_structured_marker": False,
+        "expected_markers": 1,
     },
     {
         "path": "examples/strict_validation.nox",
-        "has_structured_marker": False,
+        "expected_markers": 1,
     },
     {
         "path": "examples/custom_validator.nox",
-        "has_structured_marker": False,
+        "expected_markers": 1,
     },
     {
         "path": "examples/json_roundtrip.nox",
-        "has_structured_marker": False,
+        "expected_markers": 1,
     },
 ]
 
@@ -91,14 +91,20 @@ def main() -> int:
     print(f"Compiler binary: {noxc_cmd}\n")
 
     if sys.platform == "win32":
-        print("[INFO] Windows platform detected. Verifying LLVM execution for all targets...")
+        print("[INFO] Windows platform detected. Verifying LLVM execution and structured markers for all targets...")
         for target in TARGETS:
             path = target["path"]
+            expected = target.get("expected_markers", 1)
             res_llvm = subprocess.run([noxc_cmd, "run", "--backend", "llvm", path], capture_output=True, text=True)
             if res_llvm.returncode != 0:
                 print(f"[FAIL] LLVM execution failed for {path}: {res_llvm.stderr}")
                 return 1
-            print(f"    [OK] LLVM executed cleanly on {path}.")
+            if args.mode in ["semantic", "all"]:
+                json_llvm = extract_structured_json(res_llvm.stdout, f"{path} [Windows LLVM]")
+                if len(json_llvm) != expected:
+                    print(f"[ERROR] Target {path} [Windows LLVM] produced {len(json_llvm)} markers, expected {expected}!")
+                    return 1
+            print(f"    [OK] LLVM executed cleanly on {path} with {expected} verified structured marker(s).")
         print("\nALL TARGETS PASSED CLEANLY ON WINDOWS (LLVM)!")
         return 0
 
@@ -106,7 +112,7 @@ def main() -> int:
 
     for target in TARGETS:
         path = target["path"]
-        has_marker = target["has_structured_marker"]
+        expected = target.get("expected_markers", 1)
         print(f"--> Target: {path}")
 
         # Run with LLVM backend
@@ -141,8 +147,11 @@ def main() -> int:
             json_llvm = extract_structured_json(res_llvm.stdout, f"{path} [LLVM]")
             json_qbe = extract_structured_json(res_qbe.stdout, f"{path} [QBE]")
 
-            if has_marker and (len(json_llvm) == 0 or len(json_qbe) == 0):
-                print(f"[ERROR] Expected NOXEN_RESULT_JSON marker in {path}, but found 0 markers!")
+            if len(json_llvm) != expected:
+                print(f"[ERROR] Target {path} [LLVM] produced {len(json_llvm)} markers, expected {expected}!")
+                return 1
+            if len(json_qbe) != expected:
+                print(f"[ERROR] Target {path} [QBE] produced {len(json_qbe)} markers, expected {expected}!")
                 return 1
 
             if json_llvm != json_qbe:
@@ -150,8 +159,7 @@ def main() -> int:
                 print(f"LLVM JSON: {json_llvm}")
                 print(f"QBE JSON:  {json_qbe}")
                 return 1
-            if len(json_llvm) > 0:
-                print(f"    [SEMANTIC OK] Verified {len(json_llvm)} structured JSON verdict(s) between LLVM and QBE.")
+            print(f"    [SEMANTIC OK] Verified {len(json_llvm)} structured JSON verdict(s) between LLVM and QBE (expected {expected}).")
 
         # 3. Strict byte-for-byte verification (if mode is strict or all)
         if args.mode in ["strict", "all"]:

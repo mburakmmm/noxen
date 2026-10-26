@@ -1,6 +1,8 @@
 # serializer_strict_test.nox — Comprehensive key uniqueness and collision test for Serializer.
 
 import nox.test
+import nox.json
+from nox.json import JsonError
 import serialization
 import core
 from serialization import Serializer
@@ -91,6 +93,71 @@ def test_large_model_o1_key_tracking() -> None:
     out: str = s.build()
     nox.test.assert_true(len(out) > 0, "100-field serializer builds successfully")
 
+def test_failed_float_does_not_mutate_internal_key_state() -> None:
+    s: Serializer = Serializer()
+    nan_caught: bool = False
+    try:
+        s.float("score", float("nan"))
+    except ValueError as e:
+        nan_caught = True
+
+    nox.test.assert_true(nan_caught, "Serializer.float rejects NaN with ValueError")
+    nox.test.assert_true(not s.has_written_key("score"), "Key 'score' must NOT be recorded in Serializer internal state after failed validation")
+
+    # In strict mode, subsequent valid write of 'score' must succeed without duplicate key error
+    s.float("score", 95.5)
+    nox.test.assert_true(s.has_written_key("score"), "Key 'score' successfully recorded after valid float")
+    out: str = s.build()
+    nox.test.assert_true(nox.strings.contains(out, "\"score\":95.5"), "Built JSON contains score: 95.5")
+
+def test_failed_opt_float_does_not_mutate_internal_key_state() -> None:
+    s: Serializer = Serializer()
+    inf_caught: bool = False
+    try:
+        s.opt_float("metric", float("inf"))
+    except ValueError as e:
+        inf_caught = True
+
+    nox.test.assert_true(inf_caught, "Serializer.opt_float rejects inf with ValueError")
+    nox.test.assert_true(not s.has_written_key("metric"), "Key 'metric' must NOT be recorded after failed validation")
+
+    s.opt_float("metric", 42.0)
+    nox.test.assert_true(s.has_written_key("metric"), "Key 'metric' recorded after valid write")
+    out: str = s.build()
+    nox.test.assert_true(nox.strings.contains(out, "\"metric\":42"), "Built JSON contains metric: 42")
+
+def test_failed_list_float_does_not_mutate_internal_key_state() -> None:
+    s: Serializer = Serializer()
+    list_caught: bool = False
+    try:
+        s.list_float("coords", [1.0, float("nan"), 3.0])
+    except ValueError as e:
+        list_caught = True
+
+    nox.test.assert_true(list_caught, "Serializer.list_float rejects array with NaN")
+    nox.test.assert_true(not s.has_written_key("coords"), "Key 'coords' must NOT be recorded after failed validation")
+
+    s.list_float("coords", [1.0, 2.0, 3.0])
+    nox.test.assert_true(s.has_written_key("coords"), "Key 'coords' recorded after valid write")
+    out: str = s.build()
+    nox.test.assert_true(nox.strings.contains(out, "\"coords\":[1.0,2.0,3.0]"), "Built JSON contains valid coords array")
+
+def test_failed_raw_json_does_not_mutate_internal_key_state() -> None:
+    s: Serializer = Serializer()
+    raw_caught: bool = False
+    try:
+        s.raw_json("payload", "{invalid json syntax")
+    except JsonError as e:
+        raw_caught = True
+
+    nox.test.assert_true(raw_caught, "Serializer.raw_json rejects malformed JSON with JsonError")
+    nox.test.assert_true(not s.has_written_key("payload"), "Key 'payload' must NOT be recorded after failed parse")
+
+    s.raw_json("payload", "{\"status\":\"ok\"}")
+    nox.test.assert_true(s.has_written_key("payload"), "Key 'payload' recorded after valid JSON parse")
+    out: str = s.build()
+    nox.test.assert_true(nox.strings.contains(out, "\"status\":\"ok\""), "Built JSON contains parsed payload")
+
 test_strict_keys_rejects_duplicate_primitive()
 test_strict_fluent_builder()
 test_strict_across_different_types()
@@ -98,4 +165,8 @@ test_non_strict_mode_allows_manual_write()
 test_lax_fluent_builder_allows_manual_write()
 test_strict_mode_with_include_extras()
 test_large_model_o1_key_tracking()
+test_failed_float_does_not_mutate_internal_key_state()
+test_failed_opt_float_does_not_mutate_internal_key_state()
+test_failed_list_float_does_not_mutate_internal_key_state()
+test_failed_raw_json_does_not_mutate_internal_key_state()
 print("serializer_strict_test passed")

@@ -88,6 +88,14 @@ val_neg_zero: float = r_neg_zero.data.get_float("val")
 nox.test.assert_true(is_negative_zero(val_neg_zero), "-0.0 preserves negative zero sign (1.0 / -0.0 == -inf)")
 nox.test.assert_true(not is_negative_zero(0.0), "0.0 is distinct positive zero (1.0 / 0.0 == inf)")
 
+# 3.1.b Negative zero serialization and re-parsing round-trip preservation
+dumped_neg_zero: str = s_num.dump(r_neg_zero.data)
+nox.test.assert_true(nox.strings.contains(dumped_neg_zero, "-0.0"), "Serialized JSON explicitly formats -0.0")
+r_rt_neg_zero: ValidationResult = s_num.validate_json(dumped_neg_zero)
+nox.test.assert_true(r_rt_neg_zero.is_valid, "Round-tripped -0.0 re-validates cleanly")
+val_rt_neg_zero: float = r_rt_neg_zero.data.get_float("val")
+nox.test.assert_true(is_negative_zero(val_rt_neg_zero), "Round-tripped -0.0 preserves negative zero sign (1.0 / -0.0 == -inf)")
+
 # 3.2 Scientific notation (small subnormal / near zero)
 r_small: ValidationResult = s_num.validate_json("{\"val\": 1e-15}")
 nox.test.assert_true(r_small.is_valid, "1e-15 is valid JSON number")
@@ -196,5 +204,5 @@ except ValueError as e:
     ser_dump_nan_caught = True
 nox.test.assert_true(ser_dump_nan_caught, "Schema.dump rejects NaN with ValueError")
 
-print("NOXEN_RESULT_JSON:{\"test\":\"float_edge_cases\",\"valid\":true,\"nan_rejected\":true,\"neg_zero_preserved\":true}")
+print("NOXEN_RESULT_JSON:{\"test\":\"float_edge_cases\",\"valid\":true,\"nan_rejected\":true,\"neg_zero_preserved\":true,\"neg_zero_roundtrip_preserved\":true}")
 print("float_edge_cases_test passed")

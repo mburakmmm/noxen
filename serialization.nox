@@ -1,9 +1,19 @@
 # serialization.nox — Controlled model serialization to JSON.
 
 import nox.json
-from nox.json import JsonWriter
+from nox.json import JsonWriter, JsonValue
 import core
 from core import ValidatedData
+
+def is_finite_float(v: float) -> bool:
+    # Pure mathematical IEEE 754 finite check without string formatting dependency:
+    # 1. NaN != NaN (v != v is True if and only if v is NaN)
+    # 2. Infinity != Infinity or (v - v) is NaN (v - v != 0.0 for +-inf)
+    if v != v:
+        return False
+    if v == (1.0 / 0.0) or v == (-1.0 / 0.0):
+        return False
+    return (v - v) == 0.0
 
 class Serializer:
     _w: JsonWriter
@@ -49,10 +59,10 @@ class Serializer:
         self._w.write_int(v)
 
     def float(self: Serializer, k: str, v: float) -> None:
+        # Validate mathematical finiteness BEFORE mutating internal serializer state
+        if not is_finite_float(v):
+            raise ValueError("Cannot serialize non-finite float (" + str(v) + ") for key '" + k + "' to JSON")
         self._record_key(k)
-        s_val: str = str(v)
-        if s_val == "nan" or s_val == "inf" or s_val == "-inf":
-            raise ValueError("Cannot serialize non-finite float (" + s_val + ") for key '" + k + "' to JSON")
         self._w.write_key(k)
         self._w.write_float(v)
 
@@ -83,14 +93,15 @@ class Serializer:
             self._w.write_int(v)
 
     def opt_float(self: Serializer, k: str, v: float | None) -> None:
+        # Validate mathematical finiteness BEFORE mutating internal serializer state
+        if v is not None:
+            if not is_finite_float(v):
+                raise ValueError("Cannot serialize non-finite float (" + str(v) + ") for key '" + k + "' to JSON")
         self._record_key(k)
         self._w.write_key(k)
         if v is None:
             self._w.write_null()
         else:
-            s_val: str = str(v)
-            if s_val == "nan" or s_val == "inf" or s_val == "-inf":
-                raise ValueError("Cannot serialize non-finite float (" + s_val + ") for key '" + k + "' to JSON")
             self._w.write_float(v)
 
     def opt_bool(self: Serializer, k: str, v: bool | None) -> None:
@@ -122,14 +133,17 @@ class Serializer:
         self._w.end_array()
 
     def list_float(self: Serializer, k: str, items: list[float]) -> None:
+        # Validate ALL items first BEFORE mutating internal serializer state
+        i: int = 0
+        while i < len(items):
+            if not is_finite_float(items[i]):
+                raise ValueError("Cannot serialize non-finite float (" + str(items[i]) + ") in array for key '" + k + "' to JSON")
+            i = i + 1
         self._record_key(k)
         self._w.write_key(k)
         self._w.begin_array()
-        i: int = 0
+        i = 0
         while i < len(items):
-            s_val: str = str(items[i])
-            if s_val == "nan" or s_val == "inf" or s_val == "-inf":
-                raise ValueError("Cannot serialize non-finite float (" + s_val + ") in array for key '" + k + "' to JSON")
             self._w.write_float(items[i])
             i = i + 1
         self._w.end_array()
@@ -145,18 +159,22 @@ class Serializer:
         self._w.end_array()
 
     def raw_json(self: Serializer, k: str, json_text: str) -> None:
+        # Parse first to guarantee valid JSON BEFORE mutating internal serializer state
+        v: JsonValue = nox.json.parse(json_text)
         self._record_key(k)
         self._w.write_key(k)
-        v: JsonValue = nox.json.parse(json_text)
         self._w.write_value(v)
 
     def opt_raw_json(self: Serializer, k: str, json_text: str | None) -> None:
-        self._record_key(k)
-        self._w.write_key(k)
+        # Parse first if not None BEFORE mutating internal serializer state
         if json_text is None:
+            self._record_key(k)
+            self._w.write_key(k)
             self._w.write_null()
         else:
             v: JsonValue = nox.json.parse(json_text)
+            self._record_key(k)
+            self._w.write_key(k)
             self._w.write_value(v)
 
     def include_extras(self: Serializer, data: ValidatedData) -> None:
@@ -172,3 +190,4 @@ class Serializer:
     def build(self: Serializer) -> str:
         self._w.end_object()
         return self._w.build()
+

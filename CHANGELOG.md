@@ -5,6 +5,24 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-10-26
+
+### Added
+- **Serializer State Integrity on Validation Failures**:
+  - Reordered validation logic in `Serializer.float`, `Serializer.opt_float`, `Serializer.list_float`, `Serializer.raw_json`, and `Serializer.opt_raw_json` so all validations occur *strictly before* `_record_key(k)` is invoked.
+  - If a value fails validation (e.g. non-finite float or malformed raw JSON), the key is never recorded into `_written_map`. Subsequent valid writes with the same key succeed without spurious duplicate key errors under strict mode.
+  - Added dedicated unit tests in `tests/unit/serializer_strict_test.nox` verifying state non-mutation across primitive, optional, list, and raw JSON serialization paths.
+- **Pure Mathematical IEEE 754 Finiteness Check (`is_finite_float`)**:
+  - Replaced string formatting dependency (`str(v) == "nan"`) with pure mathematical IEEE 754 axioms: `v != v` (detecting NaN) and `(v - v) != 0.0` (detecting +-Infinity).
+  - Exported `is_finite_float(v: float) -> bool` from `serialization.nox` and top-level `noxen.nox`.
+- **Negative Zero (`-0.0`) Serialization & Round-Trip Preservation**:
+  - Expanded `tests/unit/float_edge_cases_test.nox` to verify that `-0.0` serialized to JSON formats as `"-0.0"` and re-parses with preserved IEEE 754 negative sign (`1.0 / val == -inf`).
+- **100% Structured Semantic Parity Markers Across All 10 Targets**:
+  - Added `NOXEN_RESULT_JSON` structured markers to `tests/fuzz/property_test.nox`, `examples/realworld_service.nox`, `examples/nested_model.nox`, `examples/strict_validation.nox`, `examples/custom_validator.nox`, and `examples/json_roundtrip.nox`.
+  - Upgraded `scripts/verify_backend_parity.py` to require `expected_markers: 1` on all 10 targets, eliminating skipped semantic targets and ensuring 100% parity verification between LLVM and QBE.
+- **Recursive Models & JSON Schema `$ref` Roadmap Documentation**:
+  - Documented future post-1.0 plans for self-referential models via JSON Schema Draft 2020-12 `$defs` and `$ref` lazy pointers in `docs/architecture.md` and `docs/roadmap.md`.
+
 ## [0.7.1] - 2026-10-26
 
 ### Added

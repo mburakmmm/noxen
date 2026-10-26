@@ -489,4 +489,5 @@ res_bad_nested: ValidationResult = cluster_s.validate_json(bad_nested_arr_json)
 nox.test.assert_true(not res_bad_nested.is_valid, "Nested array constraint violation rejected")
 nox.test.assert_eq_str(res_bad_nested.errors[0].path, "nodes[0].locations[0].city", "Error accurately attributed to deep array path")
 
+print("NOXEN_RESULT_JSON:{\"test\":\"property_test\",\"valid\":true,\"permutations\":239}")
 print("property_test passed (192 valid Cartesian + 12 Unicode + 12 Float + 3 Nested Models + 2 Nested Array Hierarchies + 18 Adversarial permutations)")

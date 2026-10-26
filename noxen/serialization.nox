@@ -1,2 +1,2 @@
 import serialization
-from serialization import Serializer
+from serialization import Serializer, is_finite_float

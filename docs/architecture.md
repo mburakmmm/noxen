@@ -116,9 +116,14 @@ Dependency flow is strictly unidirectional with no circular dependencies.
 ### 3.6 Automatic Schema Derivation Architecture (`schema.nox: auto_schema`)
 - **Reflection Inspection**: Inspects user class `__init__` constructor parameter names and types at initialization via `nox.reflect`.
 - **Recursive Derivation**: Automatically recurses into nested classes (`field_object`) and arrays of classes (`field_list_schema`).
-- **Cycle & Recursion Protection**: Tracks derivation call stacks to detect self-referential or mutually cyclic models (e.g. `Category` containing `Category | None`), raising `ValueError` and preventing stack exhaustion.
+- **Cycle & Recursion Protection**: Tracks derivation call stacks to detect self-referential or mutually cyclic models (e.g. `Category` containing `Category | None`), raising `ValueError` and preventing stack exhaustion. Self-referential models are targeted for post-1.0 via JSON Schema Draft 2020-12 `$defs`/`$ref` lazy pointer resolution.
 - **Strict Type Validation**: Every parameter type must resolve to a known Noxen mapping; unrecognized types raise `ValueError` immediately to prevent silent data omission.
 - **Ahead-of-Time Boundary**: Because Nox is compiled ahead-of-time to native machine code without runtime `eval` or dynamic object instantiation, model construction (`(ValidatedData) -> T`) remains an explicit compiled closure, guaranteeing 100% static type safety and zero runtime reflection overhead during request processing.
+
+### 3.7 Serialization State Invariant & Non-Finite Number Safety (`serialization.nox: Serializer`)
+- **Validation Before State Mutation**: All validations (mathematical finiteness via `is_finite_float`, array bounds, JSON syntax validation in `raw_json`) execute *before* `_record_key(k)`. If validation fails and throws `ValueError` or `JsonError`, the serializer's internal duplicate detection map (`_written_map`) is completely untouched. Subsequent writes to the same key succeed without spurious duplicate key errors.
+- **Pure Mathematical IEEE 754 Finiteness**: Uses `is_finite_float(v)` based on mathematical IEEE 754 axioms (`v != v` detecting NaN; `(v - v) != 0.0` detecting +-Infinity) rather than string formatting.
+- **Negative Zero (-0.0) Round-Trip Preservation**: Both `Serializer.float` and `Schema.dump` preserve IEEE 754 `-0.0` through JSON serialization and re-parsing (`1.0 / -0.0 == -inf`).
 
 ## 4. Framework-Independent Adapter Architecture
 

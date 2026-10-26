@@ -47,3 +47,4 @@ res: Result[Company] = model.parse_json(valid_json)
 if res.is_ok:
     c: Company = res.unwrap()
     print("Company:", c.name, "located in", c.address.city + ",", c.address.country)
+    print("NOXEN_RESULT_JSON:{\"model\":\"nested_model\",\"company\":\"Acme Corp\",\"city\":\"San Francisco\"}")

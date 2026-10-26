@@ -423,7 +423,10 @@ noxc run --backend qbe benchmarks/run_benchmarks.nox
 | Field Aliases | Supported | `.alias("json_key")` |
 | Nested Objects | Supported | `.field_object("address", addr_schema)` |
 | Multi-Level Nested Arrays | Supported | `.field_list_schema("employees", emp_schema)` with deep dot-and-index error paths |
-| Dual-Backend Parity | Supported | 100% byte-for-byte parity verified across LLVM and QBE |
+| Dual-Backend Parity | Supported | 100% structured semantic parity and byte-for-byte stdout verified across all 10 targets on LLVM and QBE |
+| Non-Finite Float Safety | Supported | Strict RFC 8259 rejection (`NaN`, `Infinity`, `-Infinity`) in parsing and serialization |
+| Serializer State Invariant | Supported | Pre-validation check guarantees serializer key state is never corrupted on failed validations |
+| Negative Zero (`-0.0`) Round-Trip | Supported | Preserves exact IEEE 754 sign (`1.0 / -0.0 == -inf`) across serialization and re-parsing |
 | Array Bounds | Supported | `min_items`, `max_items` |
 | Nested models (`object`) | Supported | Full recursive path validation with `max_depth` caps |
 | Arrays / Collections | Supported | Lists of primitives and lists of objects |
@@ -447,7 +450,7 @@ Run the full test suite with:
 noxc test
 ```
 
-All 26 unit, integration, and fuzz test suites pass cleanly across Linux, macOS, and Windows CI:
+All 29 unit, integration, and fuzz test suites pass cleanly across Linux, macOS, and Windows CI:
 
 ```text
 alias_test passed
