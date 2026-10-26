@@ -112,3 +112,12 @@ Dependency flow is strictly unidirectional with no circular dependencies.
   - Returns `Result[T]` containing either the typed model instance or the ordered list of `FieldError`s.
 - `Result[T].unwrap() -> T`:
   - Returns the model if valid; raises `ValidationError` if validation failed.
+
+## 4. Framework-Independent Adapter Architecture
+
+In strict conformance with AGENTS.md §0 and §2:
+- Noxen is a **zero-dependency** library. It has **no mandatory dependencies** on external frameworks such as Aether or Nyx.
+- Interoperability with the Nox ecosystem is achieved using standard Nox protocol types provided directly by the Nox standard library:
+  - **HTTP Interop (`http_adapter.nox`)**: Built on `nox.http.HttpRequest` and `nox.http.HttpResponse`. Offers standard JSON HTTP response generators (`json_200`, `json_201`, `json_422`) returning structured RFC 7807/machine-readable validation errors. Any Nox web server or framework (including Aether) consumes these response structures natively.
+  - **Database Interop (`db_adapter.nox`)**: Built on `nox.db.Row` and `nox.db.Statement`. Offers `DbAdapter[T]` and `row_to_validated_data(row: Row)` to hydrate and validate rows from SQLite (`nox.sqlite`), PostgreSQL, or MySQL into typed `ModelSchema[T]` instances without framework coupling.
+

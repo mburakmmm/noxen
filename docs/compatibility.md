@@ -125,3 +125,31 @@
 ### JSON Schema Draft 2020-12 `$defs` Specification
 - **Finding**: In JSON Schema Draft 2020-12, all `$ref: "#/$defs/..."` pointers must resolve from the root document. Nested sub-schemas must not encapsulate local `$defs` or `$schema` keywords.
 - **Decision**: `Schema.to_json_schema()` collects all child and grandchild schema definitions into a unified root-level `$defs` dictionary, verified against the official JSON Schema Draft 2020-12 metaschema via independent validation.
+
+## 7. Fuzzing, Invariants & Adapter Architecture (v0.5.3)
+
+### Optional Member Attribute Type Narrowing
+- **Finding**: In `noxc 2.0.27`, compiler type-narrowing on `if x is not None:` applies strictly to local variable symbols. Narrowing an optional member attribute on an object instance (e.g. `if obj.optional_field is not None:`) does not propagate narrowed non-optional types to member accesses in the guarded body.
+- **Decision**: Explicitly unpack member fields into local variables before type-narrowing assertions:
+  ```nox
+  val: str | None = obj.optional_field
+  if val is not None:
+      nox.test.assert_eq_str(val, expected, "verified")
+  ```
+
+### Zero-Framework Dependency Adapter Contract
+- **Finding**: High-level web and ORM frameworks (Aether, Nyx) frequently evolve route handler and repository interfaces. Tying the data modeling core to framework packages creates circular dependencies and dependency lock-in.
+- **Decision**: Noxen core maintains strictly **zero third-party dependencies**. Integrations are provided via lightweight protocol adapters (`http_adapter.nox`, `db_adapter.nox`) built entirely on the Nox standard library (`nox.http` and `nox.db`).
+
+### Dual-Backend Benchmark Performance Baselines
+- **LLVM Backend (`--backend llvm`)**:
+  - Flat Model Parsing: 625,000 ops/sec (8 ms / 5,000 ops)
+  - Nested Model Parsing: 555,555 ops/sec (9 ms / 5,000 ops)
+  - Fast Model Serialization: 1,250,000 ops/sec (4 ms / 5,000 ops)
+  - Validated Model Dump: 625,000 ops/sec (8 ms / 5,000 ops)
+- **QBE Backend (`--backend qbe`)**:
+  - Flat Model Parsing: 555,555 ops/sec (9 ms / 5,000 ops)
+  - Nested Model Parsing: 500,000 ops/sec (10 ms / 5,000 ops)
+  - Fast Model Serialization: 1,250,000 ops/sec (4 ms / 5,000 ops)
+  - Validated Model Dump: 555,555 ops/sec (9 ms / 5,000 ops)
+

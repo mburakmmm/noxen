@@ -87,7 +87,7 @@ Add Noxen to your project's `nox.json`:
     {
       "alias": "noxen",
       "repo": "github.com/mburakmmm/noxen",
-      "ref": "v0.5.2"
+      "ref": "v0.5.3"
     }
   ]
 }
@@ -102,7 +102,7 @@ noxc fetch
 Or install via `noxc`:
 
 ```sh
-noxc add noxen github.com/mburakmmm/noxen --ref v0.3.2
+noxc add noxen github.com/mburakmmm/noxen --ref v0.5.3
 ```
 
 ---

@@ -5,6 +5,26 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] - 2026-10-26
+
+### Added
+- **Full-Field Combinatorial Round-Trip Verification**:
+  - Upgraded `tests/fuzz/property_test.nox` to assert 100% of model fields across all 192 valid Cartesian combinations:
+    - `id`: integer equality (`assert_eq_int`)
+    - `tag`: choice string equality (`assert_eq_str`)
+    - `active`: boolean equality
+    - `ratio`: floating point precision preservation within $\epsilon < 10^{-4}$
+    - `notes`: strict null-state vs string-content round-trip verification across both `None` and populated string states.
+- **Expanded Invariant & Adversarial Fuzzing Coverage**:
+  - **Unicode String Invariant**: Tested 9 diverse character sets and escape patterns including Turkish characters (`çğıöşü ÇĞİÖŞÜ`), European accented letters, Asian ideograms (Japanese/Chinese/Korean), Cyrillic, emoji sequences, quotes, backslashes, newlines, tabs, and empty/whitespace strings. Validates zero byte degradation and exact string round-trip equivalence.
+  - **Float Precision & Boundary Invariant**: Verified precision retention across float boundaries (`0.0`, `1.0`, `0.00001`, `0.99999`, `0.123456`, `12345.6789`, `-42.5`).
+  - **Nested Model Invariant**: Multi-level hierarchy round-trip (`MachineRecord` containing nested `HardwareSpecs`) verifying that outer identifiers and inner nested fields (including nullable/optional GPU models) preserve schema validity and value fidelity.
+  - **Adversarial Permutations**: Expanded to 17 adversarial checks covering boundary out-of-range bounds, invalid choice sets, string-for-int type mismatches, non-strict boolean numbers under strict mode, missing required fields, and unexpected extra fields under `POLICY_FORBID`.
+- **Framework-Independent Zero-Dependency Adapter Contract**:
+  - Formalized AGENTS.md §0 & §2 zero-framework dependency invariants in `docs/architecture.md` and `docs/compatibility.md`: Noxen core and adapters interact exclusively via standard `nox.http` (`HttpRequest`, `HttpResponse`) and `nox.db` (`Row`, `Statement`).
+- **Documented Dual-Backend Performance Baselines**:
+  - Documented benchmark baselines for LLVM (454k - 1.25M ops/sec) and QBE (384k - 1.25M ops/sec) in `docs/compatibility.md`.
+
 ## [0.5.2] - 2026-10-26
 
 ### Added

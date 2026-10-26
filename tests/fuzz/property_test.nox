@@ -1,5 +1,5 @@
 # tests/fuzz/property_test.nox
-# Property-based combinatorial invariant tests for Noxen.
+# Property-based combinatorial invariant and adversarial tests for Noxen.
 
 import nox.test
 import schema
@@ -10,6 +10,9 @@ from schema import Schema
 from core import ValidatedData, ValidationResult
 from models import ModelSchema, BidirectionalModel
 
+# -----------------------------------------------------------------------------
+# Model 1: SensorRecord (Combinatorial Flat Model)
+# -----------------------------------------------------------------------------
 class SensorRecord:
     id: int
     ratio: float
@@ -53,7 +56,7 @@ sensor_schema.field_str("notes").optional().nullable()
 sensor_model: ModelSchema[SensorRecord] = ModelSchema[SensorRecord](sensor_schema, make_sensor)
 sensor_bi: BidirectionalModel[SensorRecord] = BidirectionalModel[SensorRecord](sensor_model, unparse_sensor)
 
-# Invariant Property 1: Round-trip preservation across combinatorial valid states
+# Invariant Property 1: Full Round-trip preservation across combinatorial valid states (192 combinations)
 valid_ids: list[int] = [1, 50, 500, 1000]
 valid_ratios: list[float] = [0.0, 0.25, 0.75, 1.0]
 valid_tags: list[str] = ["alpha", "beta", "gamma"]
@@ -93,12 +96,23 @@ while note_mode < 2:
                     dumped_val: str = sensor_bi.dump_validated(sr)
                     nox.test.assert_eq_str(dumped_fast, dumped_val, "dump and dump_validated match on valid data")
 
-                    # Property 1c: JSON round-trip re-parses to identical values
+                    # Property 1c: JSON round-trip re-parses to identical values for ALL fields
                     parsed_res: ValidationResult = sensor_schema.validate_json(dumped_val)
                     nox.test.assert_true(parsed_res.is_valid, "Serialized JSON re-validates cleanly")
                     nox.test.assert_eq_int(parsed_res.data.get_int("id"), cur_id, "id preserved in round-trip")
                     nox.test.assert_eq_str(parsed_res.data.get_str("tag"), cur_tag, "tag preserved in round-trip")
                     nox.test.assert_true(parsed_res.data.get_bool("active") == cur_act, "active preserved in round-trip")
+
+                    # Exact field verification for ratio (float precision within epsilon)
+                    diff_ratio: float = abs(parsed_res.data.get_float("ratio") - cur_rat)
+                    nox.test.assert_true(diff_ratio < 0.0001, "ratio preserved in round-trip")
+
+                    # Exact field verification for notes (nullable vs string)
+                    if cur_note is None:
+                        nox.test.assert_true(parsed_res.data.is_null("notes"), "notes is null when None")
+                        nox.test.assert_true(parsed_res.data.get_opt_str("notes") is None, "notes get_opt_str is None")
+                    else:
+                        nox.test.assert_eq_str(parsed_res.data.get_str("notes"), cur_note, "notes string preserved in round-trip")
 
                     comb_count = comb_count + 1
                     i_act = i_act + 1
@@ -107,9 +121,11 @@ while note_mode < 2:
         i_id = i_id + 1
     note_mode = note_mode + 1
 
-nox.test.assert_true(comb_count == 192, "Tested 192 valid combinatorial states")
+nox.test.assert_true(comb_count == 192, "Tested 192 valid combinatorial states with complete field verification")
 
+# -----------------------------------------------------------------------------
 # Invariant Property 2: Soundness — Constraint violation always detected at exact path
+# -----------------------------------------------------------------------------
 # Test out-of-range IDs
 bad_ids: list[int] = [0, -1, -999, 1001, 9999]
 bi_i: int = 0
@@ -140,4 +156,220 @@ while br_i < len(bad_ratios):
     nox.test.assert_eq_str(v_bad_rat.errors[0].path, "ratio", "Error attributed to ratio")
     br_i = br_i + 1
 
-print("property_test passed (192 valid Cartesian + 13 adversarial permutations)")
+# -----------------------------------------------------------------------------
+# Invariant Property 3: Unicode & JSON Escaping String Round-Trip Preservation
+# -----------------------------------------------------------------------------
+class TextRecord:
+    id: int
+    content: str
+
+    def __init__(self, id: int, content: str) -> None:
+        self.id = id
+        self.content = content
+
+def make_text_record(d: ValidatedData) -> TextRecord:
+    return TextRecord(d.get_int("id"), d.get_str("content"))
+
+def unparse_text_record(t: TextRecord) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_int("id", t.id)
+    d.set_str("content", t.content)
+    return d
+
+text_schema: Schema = Schema("TextRecord")
+text_schema.field_int("id").min_i(1)
+text_schema.field_str("content")
+
+text_model: ModelSchema[TextRecord] = ModelSchema[TextRecord](text_schema, make_text_record)
+text_bi: BidirectionalModel[TextRecord] = BidirectionalModel[TextRecord](text_model, unparse_text_record)
+
+unicode_test_strings: list[str] = [
+    "Türkçe karakter seti: çğıöşü ÇĞİÖŞÜ",
+    "International: España, München, Zürich, Tokyo 東京, Seoul 서울",
+    "Cyrillic: Привет мир, Добро пожаловать",
+    "Emoji sequences: 🚀 🔥 ⚡ 🎯 💻 📦 ✨ 🎉",
+    "Quotes and Backslashes: \"quoted text\" and \\backslash\\ path",
+    "Newlines and Tabs: Line 1\nLine 2\tTabbed\rCarriage",
+    "Code snippets: <script>alert('xss')</script> and SELECT * FROM users;",
+    "",
+    "   leading and trailing spaces   "
+]
+
+ut_i: int = 0
+while ut_i < len(unicode_test_strings):
+    u_str: str = unicode_test_strings[ut_i]
+    tr: TextRecord = TextRecord(ut_i + 1, u_str)
+
+    # Validate model
+    v_tr: ValidationResult = text_bi.validate_model(tr)
+    nox.test.assert_true(v_tr.is_valid, "Unicode text passes validate_model")
+
+    # Serialize via dump and dump_validated
+    d_fast: str = text_bi.dump(tr)
+    d_chk: str = text_bi.dump_validated(tr)
+    nox.test.assert_eq_str(d_fast, d_chk, "dump matches dump_validated for unicode")
+
+    # Deserialize and assert full string equivalence
+    parsed_u: ValidationResult = text_schema.validate_json(d_chk)
+    nox.test.assert_true(parsed_u.is_valid, "Unicode JSON re-validates cleanly")
+    nox.test.assert_eq_str(parsed_u.data.get_str("content"), u_str, "String content preserved exactly")
+    ut_i = ut_i + 1
+
+# -----------------------------------------------------------------------------
+# Invariant Property 4: Float Precision and Scientific Representation Round-Trip
+# -----------------------------------------------------------------------------
+class MeasurementRecord:
+    reading: float
+
+    def __init__(self, reading: float) -> None:
+        self.reading = reading
+
+def make_measurement(d: ValidatedData) -> MeasurementRecord:
+    return MeasurementRecord(d.get_float("reading"))
+
+def unparse_measurement(m: MeasurementRecord) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_float("reading", m.reading)
+    return d
+
+meas_schema: Schema = Schema("MeasurementRecord")
+meas_schema.field_float("reading")
+
+meas_model: ModelSchema[MeasurementRecord] = ModelSchema[MeasurementRecord](meas_schema, make_measurement)
+meas_bi: BidirectionalModel[MeasurementRecord] = BidirectionalModel[MeasurementRecord](meas_model, unparse_measurement)
+
+float_test_vals: list[float] = [0.0, 1.0, 0.5, 0.00001, 0.99999, 0.123456, 12345.6789, -42.5]
+flt_i: int = 0
+while flt_i < len(float_test_vals):
+    expected_f: float = float_test_vals[flt_i]
+    mr: MeasurementRecord = MeasurementRecord(expected_f)
+    d_f: str = meas_bi.dump_validated(mr)
+    p_f: ValidationResult = meas_schema.validate_json(d_f)
+    nox.test.assert_true(p_f.is_valid, "Float re-validates cleanly")
+    diff_f: float = abs(p_f.data.get_float("reading") - expected_f)
+    nox.test.assert_true(diff_f < 0.0001, "Float value preserved within epsilon")
+    flt_i = flt_i + 1
+
+# -----------------------------------------------------------------------------
+# Invariant Property 5: Nested Model Round-Trip Preservation
+# -----------------------------------------------------------------------------
+class HardwareSpecs:
+    cores: int
+    memory_mb: int
+    gpu_model: str | None
+
+    def __init__(self, cores: int, memory_mb: int, gpu_model: str | None) -> None:
+        self.cores = cores
+        self.memory_mb = memory_mb
+        self.gpu_model = gpu_model
+
+class MachineRecord:
+    machine_id: int
+    hostname: str
+    hardware: HardwareSpecs
+
+    def __init__(self, machine_id: int, hostname: str, hardware: HardwareSpecs) -> None:
+        self.machine_id = machine_id
+        self.hostname = hostname
+        self.hardware = hardware
+
+hw_schema: Schema = Schema("HardwareSpecs")
+hw_schema.field_int("cores").min_i(1)
+hw_schema.field_int("memory_mb").min_i(512)
+hw_schema.field_str("gpu_model").optional().nullable()
+
+def make_hw(d: ValidatedData) -> HardwareSpecs:
+    return HardwareSpecs(d.get_int("cores"), d.get_int("memory_mb"), d.get_opt_str("gpu_model"))
+
+def unparse_hw(hw: HardwareSpecs) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_int("cores", hw.cores)
+    d.set_int("memory_mb", hw.memory_mb)
+    d.set_opt_str("gpu_model", hw.gpu_model)
+    return d
+
+mach_schema: Schema = Schema("MachineRecord")
+mach_schema.field_int("machine_id").min_i(1)
+mach_schema.field_str("hostname").min_length(3)
+mach_schema.field_object("hardware", hw_schema)
+
+def make_mach(d: ValidatedData) -> MachineRecord:
+    hw_d: ValidatedData = d.get_object("hardware")
+    return MachineRecord(d.get_int("machine_id"), d.get_str("hostname"), make_hw(hw_d))
+
+def unparse_mach(m: MachineRecord) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_int("machine_id", m.machine_id)
+    d.set_str("hostname", m.hostname)
+    d.set_object("hardware", unparse_hw(m.hardware))
+    return d
+
+mach_model: ModelSchema[MachineRecord] = ModelSchema[MachineRecord](mach_schema, make_mach)
+mach_bi: BidirectionalModel[MachineRecord] = BidirectionalModel[MachineRecord](mach_model, unparse_mach)
+
+# Test multiple nested permutations
+hw_permutations: list[HardwareSpecs] = [
+    HardwareSpecs(4, 8192, None),
+    HardwareSpecs(16, 65536, "NVIDIA RTX 4090"),
+    HardwareSpecs(64, 262144, "NVIDIA H100 SXM5")
+]
+
+hw_i: int = 0
+while hw_i < len(hw_permutations):
+    cur_hw: HardwareSpecs = hw_permutations[hw_i]
+    host_name: str = "cluster-node-" + str(hw_i + 1)
+    mr_inst: MachineRecord = MachineRecord(hw_i + 100, host_name, cur_hw)
+
+    # Validate model
+    v_mr: ValidationResult = mach_bi.validate_model(mr_inst)
+    nox.test.assert_true(v_mr.is_valid, "Nested model passes validate_model")
+
+    # Serialize and round-trip
+    dumped_mach: str = mach_bi.dump_validated(mr_inst)
+    parsed_mach: ValidationResult = mach_schema.validate_json(dumped_mach)
+    nox.test.assert_true(parsed_mach.is_valid, "Nested JSON re-validates cleanly")
+
+    # Verify outer model properties
+    nox.test.assert_eq_int(parsed_mach.data.get_int("machine_id"), hw_i + 100, "machine_id preserved")
+    nox.test.assert_eq_str(parsed_mach.data.get_str("hostname"), host_name, "hostname preserved")
+
+    # Verify inner nested model properties
+    inner_hw: ValidatedData = parsed_mach.data.get_object("hardware")
+    nox.test.assert_eq_int(inner_hw.get_int("cores"), cur_hw.cores, "nested cores preserved")
+    nox.test.assert_eq_int(inner_hw.get_int("memory_mb"), cur_hw.memory_mb, "nested memory preserved")
+    gpu_val: str | None = cur_hw.gpu_model
+    if gpu_val is None:
+        nox.test.assert_true(inner_hw.is_null("gpu_model"), "nested null gpu_model preserved")
+    else:
+        nox.test.assert_eq_str(inner_hw.get_str("gpu_model"), gpu_val, "nested gpu_model string preserved")
+
+    hw_i = hw_i + 1
+
+# -----------------------------------------------------------------------------
+# Invariant Property 6: Additional Adversarial JSON Payloads
+# -----------------------------------------------------------------------------
+# 1. Type mismatch (string passed for integer id)
+bad_type_json: str = "{\"id\": \"not_an_int\", \"ratio\": 0.5, \"tag\": \"alpha\", \"active\": true, \"notes\": null}"
+res_bad_type: ValidationResult = sensor_schema.validate_json(bad_type_json)
+nox.test.assert_true(not res_bad_type.is_valid, "String for int rejected")
+nox.test.assert_eq_str(res_bad_type.errors[0].path, "id", "Error on path id")
+
+# 2. Boolean strictness (numeric 1 passed for boolean active in strict mode)
+bad_bool_json: str = "{\"id\": 10, \"ratio\": 0.5, \"tag\": \"alpha\", \"active\": 1, \"notes\": null}"
+res_bad_bool: ValidationResult = sensor_schema.validate_json(bad_bool_json)
+nox.test.assert_true(not res_bad_bool.is_valid, "Numeric 1 for bool rejected in strict mode")
+nox.test.assert_eq_str(res_bad_bool.errors[0].path, "active", "Error on path active")
+
+# 3. Missing required field
+missing_field_json: str = "{\"ratio\": 0.5, \"tag\": \"alpha\", \"active\": true}"
+res_missing: ValidationResult = sensor_schema.validate_json(missing_field_json)
+nox.test.assert_true(not res_missing.is_valid, "Missing required id rejected")
+nox.test.assert_eq_str(res_missing.errors[0].path, "id", "Error on path id")
+
+# 4. Unexpected extra fields when POLICY_FORBID is active
+unexpected_json: str = "{\"id\": 10, \"ratio\": 0.5, \"tag\": \"alpha\", \"active\": true, \"notes\": null, \"malicious_extra\": 999}"
+res_extra: ValidationResult = sensor_schema.validate_json(unexpected_json)
+nox.test.assert_true(not res_extra.is_valid, "Unexpected extra field rejected under FORBID")
+nox.test.assert_eq_str(res_extra.errors[0].path, "malicious_extra", "Error on extra field path")
+
+print("property_test passed (192 valid Cartesian + 9 Unicode + 8 Float + 3 Nested + 17 Adversarial permutations)")

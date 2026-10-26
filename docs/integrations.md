@@ -17,7 +17,7 @@ Noxen replaces flat DTO schemas with statically typed, validated data models and
   "entry": "main.nox",
   "requires": [
     { "alias": "aether", "repo": "github.com/mburakmmm/aether", "ref": "master" },
-    { "alias": "noxen", "repo": "github.com/mburakmmm/noxen", "ref": "v0.1.0" }
+    { "alias": "noxen", "repo": "github.com/mburakmmm/noxen", "ref": "v0.5.3" }
   ]
 }
 ```
@@ -99,7 +99,7 @@ schema_spec: str = create_user_schema.to_json_schema()
   "entry": "main.nox",
   "requires": [
     { "alias": "nyx", "repo": "github.com/mburakmmm/nyx", "ref": "master" },
-    { "alias": "noxen", "repo": "github.com/mburakmmm/noxen", "ref": "v0.1.0" }
+    { "alias": "noxen", "repo": "github.com/mburakmmm/noxen", "ref": "v0.5.3" }
   ]
 }
 ```
