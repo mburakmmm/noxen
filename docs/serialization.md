@@ -86,29 +86,55 @@ print(user_s.build())
 
 ---
 
-## 6. Automated Schema Serialization (Reflection-Free)
+## 6. Automated Schema & Bidirectional Model Serialization (Reflection-Free)
 
-Starting in `v0.3.2`, Noxen supports automated serialization directly from validated models and schemas using `dump(data: ValidatedData) -> str`:
+Starting in `v0.3.2` and perfected in `v0.4.0`, Noxen supports automated serialization directly from validated models and schemas using `dump(data: ValidatedData) -> str` and typed `BidirectionalModel[T]`:
 
 ```nox
-import schema
-from schema import Schema
+import noxen
+import models
+from noxen import Schema, ValidatedData
+from models import ModelSchema, BidirectionalModel
 
-# 1. Define schema with fields, aliases, and nested structures
-s: Schema = Schema("User")
-s.field_int("id")
-s.field_str("name").alias("full_name")
-s.field_str("bio").nullable().optional()
+class User:
+    id: int
+    name: str
+    bio: str | None
 
-# 2. Validate input
-res = s.validate_json("{\"id\": 42, \"full_name\": \"Grace Hopper\", \"bio\": null}")
+    def __init__(self, id: int, name: str, bio: str | None) -> None:
+        self.id = id
+        self.name = name
+        self.bio = bio
 
-# 3. Automatically dump validated data back to JSON wire format
-output_json: str = s.dump(res.data)
+user_schema: Schema = Schema("User")
+user_schema.field_int("id")
+user_schema.field_str("name").alias("full_name")
+user_schema.field_str("bio").nullable().optional()
+
+def make_user(d: ValidatedData) -> User:
+    return User(d.get_int("id"), d.get_str("name"), d.get_opt_str("bio"))
+
+def unparse_user(u: User) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_int("id", u.id)
+    d.set_str("name", u.name)
+    d.set_opt_str("bio", u.bio)
+    return d
+
+user_model: ModelSchema[User] = ModelSchema[User](user_schema, make_user)
+user_bi: BidirectionalModel[User] = BidirectionalModel[User](user_model, unparse_user)
+
+# Parse from JSON into typed User object
+user: User = user_bi.parse_json("{\"id\": 42, \"full_name\": \"Grace Hopper\", \"bio\": null}").unwrap()
+
+# Dump typed User object directly back to JSON wire format (with alias 'full_name'!)
+dumped_json: str = user_bi.dump(user)
 # {"id":42,"full_name":"Grace Hopper","bio":null}
 ```
 
-### Key Collision Protection with `POLICY_ALLOW`
+### Key Collision Protection with `strict()` and `POLICY_ALLOW`
+
+`Serializer.strict() -> Serializer` activates strict key checking. Any attempt to write a duplicate key raises `ValueError` immediately.
 
 When `POLICY_ALLOW` is enabled, extra properties present in `ValidatedData` are serialized automatically without duplicate key bugs. `Serializer` tracks all written keys (`has_written_key`) so that extra properties colliding with defined schema fields are safely ignored during output generation.
 
@@ -116,7 +142,7 @@ When `POLICY_ALLOW` is enabled, extra properties present in `ValidatedData` are 
 
 ## 7. Performance
 
-Because `Serializer` streams directly to Zig's underlying string buffer via `JsonWriter`:
-* Generates over **780,000 JSON documents per second** on Apple Silicon ARM64.
+Because `Serializer` streams directly to Zig's underlying string buffer via `JsonWriter` and `ValidatedData` utilizes a non-cyclic flat representation:
+* Generates over **1,250,000 serialized documents per second** on Apple Silicon ARM64.
 * Does not construct intermediate dynamic hash tables.
-* Minimizes heap allocations.
+* Minimizes heap allocations with zero garbage collector lock contention.

@@ -10,185 +10,347 @@ class ValidatedData:
     _ints: dict[str, int]
     _floats: dict[str, float]
     _bools: dict[str, bool]
-    _objs: dict[str, ValidatedData]
     _list_strs: dict[str, list[str]]
     _list_ints: dict[str, list[int]]
     _list_floats: dict[str, list[float]]
     _list_bools: dict[str, list[bool]]
-    _list_objs: dict[str, list[ValidatedData]]
+    _list_objs_len: dict[str, int]
     _nulls: list[str]
     _present: list[str]
     _extras: dict[str, str]
     _extra_keys: list[str]
+    _prefix: str
 
     def __init__(self: ValidatedData) -> None:
         self._strs = {}
         self._ints = {}
         self._floats = {}
         self._bools = {}
-        self._objs = {}
         self._list_strs = {}
         self._list_ints = {}
         self._list_floats = {}
         self._list_bools = {}
-        self._list_objs = {}
+        self._list_objs_len = {}
         self._nulls = []
         self._present = []
         self._extras = {}
         self._extra_keys = []
+        self._prefix = ""
 
     def set_str(self: ValidatedData, k: str, v: str) -> None:
-        self._strs[k] = v
-        self._present.append(k)
+        pk: str = self._prefix + k
+        self._strs[pk] = v
+        self._present.append(pk)
 
     def set_int(self: ValidatedData, k: str, v: int) -> None:
-        self._ints[k] = v
-        self._present.append(k)
+        pk: str = self._prefix + k
+        self._ints[pk] = v
+        self._present.append(pk)
 
     def set_float(self: ValidatedData, k: str, v: float) -> None:
-        self._floats[k] = v
-        self._present.append(k)
+        pk: str = self._prefix + k
+        self._floats[pk] = v
+        self._present.append(pk)
 
     def set_bool(self: ValidatedData, k: str, v: bool) -> None:
-        self._bools[k] = v
-        self._present.append(k)
+        pk: str = self._prefix + k
+        self._bools[pk] = v
+        self._present.append(pk)
 
     def set_object(self: ValidatedData, k: str, v: ValidatedData) -> None:
-        self._objs[k] = v
-        self._present.append(k)
+        pk: str = self._prefix + k
+        self._present.append(pk)
+        sub_pfx: str = pk + "."
+        vpfx_len: int = len(v._prefix)
+        pi: int = 0
+        while pi < len(v._present):
+            orig_k: str = v._present[pi]
+            clean_k: str = orig_k
+            if vpfx_len > 0 and len(clean_k) >= vpfx_len and clean_k[0:vpfx_len] == v._prefix:
+                clean_k = clean_k[vpfx_len:len(clean_k)]
+            target_k: str = sub_pfx + clean_k
+            self._present.append(target_k)
+            if orig_k in v._strs:
+                self._strs[target_k] = v._strs[orig_k]
+            if orig_k in v._ints:
+                self._ints[target_k] = v._ints[orig_k]
+            if orig_k in v._floats:
+                self._floats[target_k] = v._floats[orig_k]
+            if orig_k in v._bools:
+                self._bools[target_k] = v._bools[orig_k]
+            if orig_k in v._list_strs:
+                self._list_strs[target_k] = v._list_strs[orig_k]
+            if orig_k in v._list_ints:
+                self._list_ints[target_k] = v._list_ints[orig_k]
+            if orig_k in v._list_floats:
+                self._list_floats[target_k] = v._list_floats[orig_k]
+            if orig_k in v._list_bools:
+                self._list_bools[target_k] = v._list_bools[orig_k]
+            if orig_k in v._list_objs_len:
+                self._list_objs_len[target_k] = v._list_objs_len[orig_k]
+            if orig_k in v._extras:
+                self._extras[target_k] = v._extras[orig_k]
+                self._extra_keys.append(target_k)
+            if v.is_null(clean_k):
+                self._nulls.append(target_k)
+            pi = pi + 1
 
     def set_list_str(self: ValidatedData, k: str, v: list[str]) -> None:
-        self._list_strs[k] = v
-        self._present.append(k)
+        pk: str = self._prefix + k
+        self._list_strs[pk] = v
+        self._present.append(pk)
 
     def set_list_int(self: ValidatedData, k: str, v: list[int]) -> None:
-        self._list_ints[k] = v
-        self._present.append(k)
+        pk: str = self._prefix + k
+        self._list_ints[pk] = v
+        self._present.append(pk)
 
     def set_list_float(self: ValidatedData, k: str, v: list[float]) -> None:
-        self._list_floats[k] = v
-        self._present.append(k)
+        pk: str = self._prefix + k
+        self._list_floats[pk] = v
+        self._present.append(pk)
 
     def set_list_bool(self: ValidatedData, k: str, v: list[bool]) -> None:
-        self._list_bools[k] = v
-        self._present.append(k)
+        pk: str = self._prefix + k
+        self._list_bools[pk] = v
+        self._present.append(pk)
 
     def set_list_object(self: ValidatedData, k: str, v: list[ValidatedData]) -> None:
-        self._list_objs[k] = v
-        self._present.append(k)
+        pk: str = self._prefix + k
+        self._present.append(pk)
+        self._list_objs_len[pk] = len(v)
+        idx: int = 0
+        while idx < len(v):
+            item: ValidatedData = v[idx]
+            item_pfx: str = pk + "[" + str(idx) + "]."
+            vpfx_len: int = len(item._prefix)
+            pi: int = 0
+            while pi < len(item._present):
+                orig_k: str = item._present[pi]
+                clean_k: str = orig_k
+                if vpfx_len > 0 and len(clean_k) >= vpfx_len and clean_k[0:vpfx_len] == item._prefix:
+                    clean_k = clean_k[vpfx_len:len(clean_k)]
+                target_k: str = item_pfx + clean_k
+                self._present.append(target_k)
+                if orig_k in item._strs:
+                    self._strs[target_k] = item._strs[orig_k]
+                if orig_k in item._ints:
+                    self._ints[target_k] = item._ints[orig_k]
+                if orig_k in item._floats:
+                    self._floats[target_k] = item._floats[orig_k]
+                if orig_k in item._bools:
+                    self._bools[target_k] = item._bools[orig_k]
+                if orig_k in item._list_strs:
+                    self._list_strs[target_k] = item._list_strs[orig_k]
+                if orig_k in item._list_ints:
+                    self._list_ints[target_k] = item._list_ints[orig_k]
+                if orig_k in item._list_floats:
+                    self._list_floats[target_k] = item._list_floats[orig_k]
+                if orig_k in item._list_bools:
+                    self._list_bools[target_k] = item._list_bools[orig_k]
+                if orig_k in item._list_objs_len:
+                    self._list_objs_len[target_k] = item._list_objs_len[orig_k]
+                if orig_k in item._extras:
+                    self._extras[target_k] = item._extras[orig_k]
+                    self._extra_keys.append(target_k)
+                if item.is_null(clean_k):
+                    self._nulls.append(target_k)
+                pi = pi + 1
+            idx = idx + 1
 
     def set_null(self: ValidatedData, k: str) -> None:
-        self._nulls.append(k)
-        self._present.append(k)
+        pk: str = self._prefix + k
+        self._nulls.append(pk)
+        self._present.append(pk)
+
+    def set_opt_str(self: ValidatedData, k: str, v: str | None) -> None:
+        if v is None:
+            self.set_null(k)
+        else:
+            self.set_str(k, v)
+
+    def set_opt_int(self: ValidatedData, k: str, v: int | None) -> None:
+        if v is None:
+            self.set_null(k)
+        else:
+            self.set_int(k, v)
+
+    def set_opt_float(self: ValidatedData, k: str, v: float | None) -> None:
+        if v is None:
+            self.set_null(k)
+        else:
+            self.set_float(k, v)
+
+    def set_opt_bool(self: ValidatedData, k: str, v: bool | None) -> None:
+        if v is None:
+            self.set_null(k)
+        else:
+            self.set_bool(k, v)
 
     def has(self: ValidatedData, k: str) -> bool:
+        pk: str = self._prefix + k
         i: int = 0
         while i < len(self._present):
-            if self._present[i] == k:
+            if self._present[i] == pk:
                 return True
             i = i + 1
         return False
 
     def is_null(self: ValidatedData, k: str) -> bool:
+        pk: str = self._prefix + k
         i: int = 0
         while i < len(self._nulls):
-            if self._nulls[i] == k:
+            if self._nulls[i] == pk:
                 return True
             i = i + 1
         return False
 
     def get_str(self: ValidatedData, k: str) -> str:
-        return self._strs[k]
+        return self._strs[self._prefix + k]
 
     def get_opt_str(self: ValidatedData, k: str) -> str | None:
         if self.is_null(k) or not self.has(k):
             return None
-        return self._strs[k]
+        return self._strs[self._prefix + k]
 
     def get_int(self: ValidatedData, k: str) -> int:
-        return self._ints[k]
+        return self._ints[self._prefix + k]
 
     def get_opt_int(self: ValidatedData, k: str) -> int | None:
         if self.is_null(k) or not self.has(k):
             return None
-        return self._ints[k]
+        return self._ints[self._prefix + k]
 
     def get_float(self: ValidatedData, k: str) -> float:
-        return self._floats[k]
+        return self._floats[self._prefix + k]
 
     def get_opt_float(self: ValidatedData, k: str) -> float | None:
         if self.is_null(k) or not self.has(k):
             return None
-        return self._floats[k]
+        return self._floats[self._prefix + k]
 
     def get_bool(self: ValidatedData, k: str) -> bool:
-        if k in self._bools:
-            return self._bools[k]
-        if k in self._ints:
-            return self._ints[k] != 0
+        pk: str = self._prefix + k
+        if pk in self._bools:
+            return self._bools[pk]
+        if pk in self._ints:
+            return self._ints[pk] != 0
         return False
 
     def get_opt_bool(self: ValidatedData, k: str) -> bool | None:
         if self.is_null(k) or not self.has(k):
             return None
-        if k in self._bools:
-            return self._bools[k]
-        if k in self._ints:
-            return self._ints[k] != 0
+        pk: str = self._prefix + k
+        if pk in self._bools:
+            return self._bools[pk]
+        if pk in self._ints:
+            return self._ints[pk] != 0
         return None
 
     def get_object(self: ValidatedData, k: str) -> ValidatedData:
-        return self._objs[k]
+        sub: ValidatedData = ValidatedData()
+        sub._prefix = self._prefix + k + "."
+        sub._strs = self._strs
+        sub._ints = self._ints
+        sub._floats = self._floats
+        sub._bools = self._bools
+        sub._list_strs = self._list_strs
+        sub._list_ints = self._list_ints
+        sub._list_floats = self._list_floats
+        sub._list_bools = self._list_bools
+        sub._list_objs_len = self._list_objs_len
+        sub._nulls = self._nulls
+        sub._present = self._present
+        sub._extras = self._extras
+        sub._extra_keys = self._extra_keys
+        return sub
 
     def get_opt_object(self: ValidatedData, k: str) -> ValidatedData | None:
         if self.is_null(k) or not self.has(k):
             return None
-        return self._objs[k]
+        return self.get_object(k)
 
     def get_list_str(self: ValidatedData, k: str) -> list[str]:
-        if not self.has(k):
+        pk: str = self._prefix + k
+        if pk not in self._list_strs:
             empty: list[str] = []
             return empty
-        return self._list_strs[k]
+        return self._list_strs[pk]
 
     def get_list_int(self: ValidatedData, k: str) -> list[int]:
-        if not self.has(k):
+        pk: str = self._prefix + k
+        if pk not in self._list_ints:
             empty: list[int] = []
             return empty
-        return self._list_ints[k]
+        return self._list_ints[pk]
 
     def get_list_float(self: ValidatedData, k: str) -> list[float]:
-        if not self.has(k):
+        pk: str = self._prefix + k
+        if pk not in self._list_floats:
             empty: list[float] = []
             return empty
-        return self._list_floats[k]
+        return self._list_floats[pk]
 
     def get_list_bool(self: ValidatedData, k: str) -> list[bool]:
-        if not self.has(k):
+        pk: str = self._prefix + k
+        if pk not in self._list_bools:
             empty: list[bool] = []
             return empty
-        return self._list_bools[k]
+        return self._list_bools[pk]
 
     def get_list_object(self: ValidatedData, k: str) -> list[ValidatedData]:
-        if not self.has(k):
-            empty: list[ValidatedData] = []
-            return empty
-        return self._list_objs[k]
+        pk: str = self._prefix + k
+        res: list[ValidatedData] = []
+        if pk not in self._list_objs_len:
+            return res
+        count: int = self._list_objs_len[pk]
+        idx: int = 0
+        while idx < count:
+            sub: ValidatedData = ValidatedData()
+            sub._prefix = pk + "[" + str(idx) + "]."
+            sub._strs = self._strs
+            sub._ints = self._ints
+            sub._floats = self._floats
+            sub._bools = self._bools
+            sub._list_strs = self._list_strs
+            sub._list_ints = self._list_ints
+            sub._list_floats = self._list_floats
+            sub._list_bools = self._list_bools
+            sub._list_objs_len = self._list_objs_len
+            sub._nulls = self._nulls
+            sub._present = self._present
+            sub._extras = self._extras
+            sub._extra_keys = self._extra_keys
+            res.append(sub)
+            idx = idx + 1
+        return res
 
     def set_extra(self: ValidatedData, k: str, json_repr: str) -> None:
-        self._extras[k] = json_repr
-        self._extra_keys.append(k)
+        pk: str = self._prefix + k
+        self._extras[pk] = json_repr
+        self._extra_keys.append(pk)
 
     def has_extra(self: ValidatedData, k: str) -> bool:
-        return k in self._extras
+        return (self._prefix + k) in self._extras
 
     def get_extra(self: ValidatedData, k: str) -> str:
-        if k in self._extras:
-            return self._extras[k]
+        pk: str = self._prefix + k
+        if pk in self._extras:
+            return self._extras[pk]
         return ""
 
     def get_extra_keys(self: ValidatedData) -> list[str]:
-        return self._extra_keys
+        if self._prefix == "":
+            return self._extra_keys
+        pfx_len: int = len(self._prefix)
+        res: list[str] = []
+        i: int = 0
+        while i < len(self._extra_keys):
+            ek: str = self._extra_keys[i]
+            if len(ek) >= pfx_len and ek[0:pfx_len] == self._prefix:
+                res.append(ek[pfx_len:len(ek)])
+            i = i + 1
+        return res
 
 class ValidationResult:
     is_valid: bool

@@ -4,15 +4,11 @@ import nox.sqlite
 from nox.sqlite import Connection
 import nox.db
 from nox.db import Row
-import schema
+import noxen
 import models
-import core
-import serialization
 import db_adapter
-from schema import Schema
+from noxen import Schema, ValidatedData, Serializer
 from models import ModelSchema
-from core import ValidatedData
-from serialization import Serializer
 from db_adapter import DbAdapter
 
 # 1. Define Model

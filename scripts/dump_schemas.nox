@@ -1,0 +1,31 @@
+# scripts/dump_schemas.nox — Generates schemas for external JSON Schema Draft 2020-12 validation.
+
+import schema
+from schema import Schema
+
+# 1. Nested Address schema
+addr: Schema = Schema("Address")
+addr.field_str("street").min_length(3)
+addr.field_str("city").min_length(2)
+addr.field_str("zip_code").min_length(4).max_length(10)
+
+# 2. Company schema referencing Address
+company: Schema = Schema("Company")
+company.field_str("name").min_length(1)
+company.field_str("tax_id").regex("^[A-Z0-9-]+$")
+company.field_object("headquarters", addr)
+
+# 3. User schema referencing Company and Address
+user: Schema = Schema("User")
+user.field_int("id").min_i(1)
+user.field_str("username").min_length(3).max_length(30)
+user.field_str("email").email()
+user.field_str("website").url().optional().nullable()
+user.field_str("created_at").datetime()
+user.field_list("tags", "string").min_items(1).max_items(10)
+user.field_object("employer", company)
+user.field_list_schema("previous_employers", company)
+
+print("---SCHEMA_START---")
+print(user.to_json_schema())
+print("---SCHEMA_END---")

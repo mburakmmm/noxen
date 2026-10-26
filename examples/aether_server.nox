@@ -2,16 +2,12 @@
 
 import nox.http
 from nox.http import HttpRequest, HttpResponse
-import schema
+import noxen
 import models
 import core
-import serialization
-import http_adapter
-from schema import Schema
+from noxen import Schema, ValidatedData, Serializer, json_201, json_422
 from models import ModelSchema
-from core import ValidatedData, Result
-from serialization import Serializer
-from http_adapter import json_201, json_422
+from core import Result
 
 # 1. Define Request DTO
 class CreateUserDto:

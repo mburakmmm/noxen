@@ -88,6 +88,19 @@ Generic wrapper mapping raw validated data into strongly typed Nox classes.
 * `validate_json(json_str: str) -> ValidationResult`: Validates JSON text and returns `ValidationResult`.
 * `validate_row(row: Row) -> ValidationResult`: Validates database row and returns `ValidationResult`.
 * `dump(data: ValidatedData) -> str`: Automatically serializes validated data to JSON through the underlying schema.
+* `dump_model(obj: T, unparser: (T) -> ValidatedData) -> str`: Automatically serializes a typed model object to JSON via an unparser closure.
+* `to_json(obj: T, unparser: (T) -> ValidatedData) -> str`: Alias for `dump_model`.
+
+### `BidirectionalModel[T]` (`models.nox`)
+Bidirectional model combining typed parsing with automated typed serialization (100% reflection-free).
+
+* `BidirectionalModel[T](model: ModelSchema[T], unparser: (T) -> ValidatedData)`
+* `parse(v: JsonValue) -> Result[T]`: Parses from `JsonValue` to typed `T`.
+* `parse_json(json_str: str) -> Result[T]`: Parses from JSON text to typed `T`.
+* `parse_row(row: Row) -> Result[T]`: Parses from database row to typed `T`.
+* `dump(obj: T) -> str`: Direct serialization from typed model object `T` to JSON.
+* `to_json(obj: T) -> str`: Alias for `dump(obj: T)`.
+* `dump_data(data: ValidatedData) -> str`: Serializes raw `ValidatedData` to JSON.
 
 ### `Result[T]` (`core.nox`)
 Generic result container representing validation outcome.
@@ -113,6 +126,9 @@ Typed accessor container for successfully validated values.
 ### `Serializer` (`serialization.nox`)
 Streaming fluent builder for high-performance JSON serialization.
 
+* `strict() -> Serializer`: Enables strict duplicate key collision protection across all writer methods.
+* `set_strict_keys(strict: bool) -> None`: Configures duplicate key collision mode.
+* `is_strict_keys() -> bool`: Returns whether strict key checking is active.
 * `str(k, v)`, `opt_str(k, v)`
 * `int(k, v)`, `opt_int(k, v)`
 * `float(k, v)`, `opt_float(k, v)`

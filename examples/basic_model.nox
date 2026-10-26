@@ -1,11 +1,11 @@
 # examples/basic_model.nox — Basic typed model with validation.
 
-import schema
+import noxen
 import models
 import core
-from schema import Schema
+from noxen import Schema, ValidatedData
 from models import ModelSchema
-from core import ValidatedData, Result
+from core import Result
 
 class Product:
     title: str

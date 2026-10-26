@@ -1,13 +1,11 @@
 # examples/json_roundtrip.nox — Validating JSON to object and serializing back.
 
-import schema
+import noxen
 import models
 import core
-import serialization
-from schema import Schema
-from models import ModelSchema
-from core import ValidatedData, Result
-from serialization import Serializer
+from noxen import Schema, ValidatedData, Serializer
+from models import ModelSchema, BidirectionalModel
+from core import Result
 
 class Account:
     email: str

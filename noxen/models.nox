@@ -1,2 +1,2 @@
 import models
-from models import ModelSchema
+from models import ModelSchema, BidirectionalModel

@@ -1,0 +1,133 @@
+# bidirectional_model_test.nox — Two-way typed model transformation (JSON <-> T) test.
+
+import nox.test
+import nox.strings
+import schema
+import models
+import core
+from schema import Schema
+from models import ModelSchema, BidirectionalModel
+from core import ValidatedData, Result
+
+class Address:
+    city: str
+    country: str
+
+    def __init__(self, city: str, country: str) -> None:
+        self.city = city
+        self.country = country
+
+class User:
+    id: int
+    name: str
+    email: str
+    bio: str | None
+    addr: Address
+
+    def __init__(self, id: int, name: str, email: str, bio: str | None, addr: Address) -> None:
+        self.id = id
+        self.name = name
+        self.email = email
+        self.bio = bio
+        self.addr = addr
+
+def make_address(d: ValidatedData) -> Address:
+    return Address(d.get_str("city"), d.get_str("country"))
+
+def unparse_address(a: Address) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_str("city", a.city)
+    d.set_str("country", a.country)
+    return d
+
+def make_user(d: ValidatedData) -> User:
+    return User(
+        d.get_int("id"),
+        d.get_str("name"),
+        d.get_str("email"),
+        d.get_opt_str("bio"),
+        make_address(d.get_object("addr"))
+    )
+
+def unparse_user(u: User) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_int("id", u.id)
+    d.set_str("name", u.name)
+    d.set_str("email", u.email)
+    d.set_opt_str("bio", u.bio)
+    d.set_object("addr", unparse_address(u.addr))
+    return d
+
+def test_direct_model_schema_serialization() -> None:
+    addr_s: Schema = Schema("Address")
+    addr_s.field_str("city")
+    addr_s.field_str("country")
+
+    user_s: Schema = Schema("User")
+    user_s.field_int("id")
+    user_s.field_str("name").alias("full_name")
+    user_s.field_str("email").email()
+    user_s.field_str("bio").nullable().optional()
+    user_s.field_object("addr", addr_s)
+
+    m: ModelSchema[User] = ModelSchema[User](user_s, make_user)
+
+    # Instantiate typed model in Nox
+    a: Address = Address("Munich", "Germany")
+    u: User = User(505, "Hans Gruber", "hans@nakatomi.org", None, a)
+
+    # Serialize using ModelSchema.to_json(u, unparser)
+    out_json: str = m.to_json(u, unparse_user)
+
+    nox.test.assert_true(nox.strings.contains(out_json, "\"id\":505"), "contains id")
+    nox.test.assert_true(nox.strings.contains(out_json, "\"full_name\":\"Hans Gruber\""), "uses alias full_name")
+    nox.test.assert_true(nox.strings.contains(out_json, "\"email\":\"hans@nakatomi.org\""), "contains email")
+    nox.test.assert_true(nox.strings.contains(out_json, "\"bio\":null"), "contains bio:null")
+    nox.test.assert_true(nox.strings.contains(out_json, "\"city\":\"Munich\""), "contains nested city")
+
+    # Roundtrip: parse serialized JSON back into typed object
+    parsed_res: Result[User] = m.parse_json(out_json)
+    nox.test.assert_true(parsed_res.is_ok, "roundtrip parse succeeds")
+    parsed_u: User = parsed_res.unwrap()
+    nox.test.assert_eq_int(parsed_u.id, 505, "id matches")
+    nox.test.assert_eq_str(parsed_u.name, "Hans Gruber", "name matches")
+    nox.test.assert_eq_str(parsed_u.addr.city, "Munich", "nested city matches")
+
+def test_bidirectional_model_wrapper() -> None:
+    addr_s: Schema = Schema("Address")
+    addr_s.field_str("city")
+    addr_s.field_str("country")
+
+    user_s: Schema = Schema("User")
+    user_s.field_int("id")
+    user_s.field_str("name")
+    user_s.field_str("email").email()
+    user_s.field_str("bio").nullable().optional()
+    user_s.field_object("addr", addr_s)
+
+    base_model: ModelSchema[User] = ModelSchema[User](user_s, make_user)
+    # Wrap with unparser once:
+    bi: BidirectionalModel[User] = BidirectionalModel[User](base_model, unparse_user)
+
+    # 1. Parse JSON into typed model
+    raw_input: str = "{\"id\": 707, \"name\":\"Linus Torvalds\", \"email\":\"linus@kernel.org\", \"bio\":\"Linux creator\", \"addr\":{\"city\":\"Helsinki\",\"country\":\"Finland\"}}"
+    r: Result[User] = bi.parse_json(raw_input)
+    nox.test.assert_true(r.is_ok, "bi.parse_json successful")
+    user_obj: User = r.unwrap()
+
+    # 2. Modify typed object in business logic
+    user_obj.name = "Linus B. Torvalds"
+
+    # 3. Direct model -> JSON serialization without passing unparser again!
+    serialized: str = bi.to_json(user_obj)
+    nox.test.assert_true(nox.strings.contains(serialized, "\"name\":\"Linus B. Torvalds\""), "serialized updated name")
+    nox.test.assert_true(nox.strings.contains(serialized, "\"id\":707"), "serialized id")
+    nox.test.assert_true(nox.strings.contains(serialized, "\"city\":\"Helsinki\""), "serialized city")
+
+    # 4. Verify dump alias method
+    dump_res: str = bi.dump(user_obj)
+    nox.test.assert_eq_str(serialized, dump_res, "to_json and dump match")
+
+test_direct_model_schema_serialization()
+test_bidirectional_model_wrapper()
+print("bidirectional_model_test passed")

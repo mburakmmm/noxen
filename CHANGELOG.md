@@ -5,6 +5,30 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-10-26
+
+### Added
+- **Bidirectional Typed Model Serialization (Zero Reflection)**:
+  - Added `BidirectionalModel[T]` combining a `ModelSchema[T]` parser with an unparser closure `(T) -> ValidatedData`.
+  - Enables direct typed model dumping: `model.dump(obj: T) -> str` and `model.to_json(obj: T) -> str` with zero reflection, zero code generation, and 100% static typing.
+  - Added `dump_model(self, obj: T, unparser: (T) -> ValidatedData) -> str` and `to_json(self, obj: T, unparser: (T) -> ValidatedData) -> str` directly on `ModelSchema[T]`.
+  - Added `set_opt_str`, `set_opt_int`, `set_opt_float`, `set_opt_bool` to `ValidatedData` for streamlined optional/nullable field unparsing.
+- **Strict Key Collision Protection Across All Serializer Writers**:
+  - `Serializer.strict() -> Serializer` enables strict key validation across all write methods (`str`, `int`, `float`, `bool`, `obj`, `raw`, `list_*`).
+  - Raises `ValueError` immediately upon attempting to emit a duplicate JSON property key.
+  - Enforced in `tests/unit/serializer_strict_test.nox`.
+- **Flat Non-Cyclic `ValidatedData` Architecture & High-Throughput Engine**:
+  - Refactored `ValidatedData` into a flat, non-recursive memory layout with hierarchical prefix scoping.
+  - Eliminates all recursive class fields, completely bypassing the runtime ARC cycle collector queue.
+  - Benchmarks achieve **416,000 to 1,250,000 ops/sec** across flat, nested, 3-level deep hierarchy parsing, and automated model dumps with zero lock contention.
+- **Independent JSON Schema Draft 2020-12 Verification**:
+  - Resolved root-relative `$defs` aggregation: `to_json_schema()` collects all transitive nested model definitions into a flat root `$defs` dictionary.
+  - Added official Draft 2020-12 metaschema verification script (`scripts/verify_json_schema.py`) and integrated it into GitHub Actions CI.
+  - Verified valid instance acceptance and strict constraint rejection (numeric bounds, regex patterns, required fields).
+- **Public API & Examples Standardization**:
+  - All 7 examples in `examples/` standardized to import from the clean top-level `noxen` facade.
+  - Extended `benchmarks/run_benchmarks.nox` with 3-level deep hierarchy and bidirectional model serialization suites.
+
 ## [0.3.2] - 2026-10-26
 
 ### Added

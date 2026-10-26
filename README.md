@@ -2,7 +2,7 @@
 
 > **Statically typed data modeling, parsing, validation, and serialization for the Nox programming language.**
 >
-> Maturity status: **v0.3.2 — Automated Serialization & Boundary Precision Release**. Verified against `noxc 2.0.27+`.
+> Maturity status: **v0.4.0 — Bidirectional Serialization & Draft 2020-12 Compliance Release**. Verified against `noxc 2.0.27+`.
 
 ---
 
@@ -47,7 +47,7 @@ Add Noxen to your project's `nox.json`:
     {
       "alias": "noxen",
       "repo": "github.com/mburakmmm/noxen",
-      "ref": "v0.3.2"
+      "ref": "v0.4.0"
     }
   ]
 }
@@ -352,10 +352,12 @@ Run the full test suite with:
 noxc test
 ```
 
-All 20 unit, integration, and fuzz test suites pass cleanly across Linux and macOS CI:
+All 24 unit, integration, and fuzz test suites pass cleanly across Linux and macOS CI:
 
 ```text
 alias_test passed
+auto_dump_test passed
+bidirectional_model_test passed
 choices_test passed
 coercion_test passed
 custom_validator_test passed
@@ -365,6 +367,7 @@ errors_test passed
 fields_test passed
 fuzz_test passed
 http_adapter_test passed
+integer_precision_test passed
 json_schema_defs_test passed
 json_schema_test passed
 limits_test passed
@@ -372,11 +375,12 @@ nested_profile_test passed
 policy_allow_test passed
 secret_redaction_test passed
 serialization_test passed
+serializer_strict_test passed
 unknown_fields_test passed
 user_model_test passed
 validators_test passed
 
-20 passed, 0 failed (20 total)
+24 passed, 0 failed (24 total)
 ```
 
 ---

@@ -1,0 +1,73 @@
+# serializer_strict_test.nox — Comprehensive key uniqueness and collision test for Serializer.
+
+import nox.test
+import serialization
+import core
+from serialization import Serializer
+from core import ValidatedData
+
+def test_strict_keys_rejects_duplicate_primitive() -> None:
+    s: Serializer = Serializer(True)
+    s.int("id", 10)
+
+    caught: bool = False
+    try:
+        s.int("id", 20)
+    except ValueError as e:
+        caught = True
+
+    nox.test.assert_true(caught, "writing duplicate key 'id' in strict mode raises ValueError")
+
+def test_strict_fluent_builder() -> None:
+    s: Serializer = Serializer().strict()
+    s.str("username", "alice")
+
+    caught: bool = False
+    try:
+        s.str("username", "bob")
+    except ValueError as e:
+        caught = True
+
+    nox.test.assert_true(caught, "strict() fluent builder rejects duplicate 'username'")
+
+def test_strict_across_different_types() -> None:
+    s: Serializer = Serializer().strict()
+    s.str("data", "hello")
+
+    caught: bool = False
+    try:
+        s.int("data", 42)
+    except ValueError as e:
+        caught = True
+
+    nox.test.assert_true(caught, "re-using key 'data' for another type raises ValueError in strict mode")
+
+def test_non_strict_mode_allows_manual_write() -> None:
+    s: Serializer = Serializer(False)
+    s.int("id", 10)
+    # Does not throw in non-strict mode
+    s.int("id", 20)
+    out: str = s.build()
+    nox.test.assert_true(len(out) > 0, "non-strict serializer builds")
+
+def test_strict_mode_with_include_extras() -> None:
+    s: Serializer = Serializer(True)
+    s.str("name", "Alice")
+    s.int("role_id", 1)
+
+    # Extra data containing duplicate 'name' and unique 'tenant'
+    d: ValidatedData = ValidatedData()
+    d.set_extra("name", "\"Bob\"")
+    d.set_extra("tenant", "\"corp\"")
+
+    # include_extras must safely skip 'name' without raising ValueError even in strict mode
+    s.include_extras(d)
+    out: str = s.build()
+    nox.test.assert_true(len(out) > 0, "strict serializer includes extras without collision")
+
+test_strict_keys_rejects_duplicate_primitive()
+test_strict_fluent_builder()
+test_strict_across_different_types()
+test_non_strict_mode_allows_manual_write()
+test_strict_mode_with_include_extras()
+print("serializer_strict_test passed")

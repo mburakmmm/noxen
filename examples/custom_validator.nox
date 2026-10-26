@@ -1,11 +1,7 @@
 # examples/custom_validator.nox — Cross-field validation using custom validator hooks.
 
-import schema
-import core
-import errors
-from schema import Schema
-from core import ValidatedData, ValidationResult
-from errors import FieldError, CODE_CUSTOM
+import noxen
+from noxen import Schema, ValidatedData, ValidationResult, FieldError, CODE_CUSTOM
 
 # Event booking where end_time must be after start_time
 event_schema: Schema = Schema("EventBooking")

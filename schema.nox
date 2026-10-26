@@ -1119,55 +1119,87 @@ class Schema:
 
         return s.build()
 
-    def to_json_schema(self: Schema) -> str:
+    def to_json_schema(self: Schema, include_defs: bool = True) -> str:
         w: JsonWriter = JsonWriter()
         w.begin_object()
-        w.write_key("$schema")
-        w.write_string("https://json-schema.org/draft/2020-12/schema")
+        if include_defs:
+            w.write_key("$schema")
+            w.write_string("https://json-schema.org/draft/2020-12/schema")
         w.write_key("title")
         w.write_string(self.name)
         w.write_key("type")
         w.write_string("object")
 
-        # Collect definitions for $defs
-        defs: list[Schema] = []
-        di: int = 0
-        while di < len(self.fields):
-            df: Field = self.fields[di]
-            df_ns: Schema | None = df.nested_schema
-            if df_ns != None:
-                already: bool = False
-                si: int = 0
-                while si < len(defs):
-                    if defs[si].name == df_ns.name:
-                        already = True
-                    si = si + 1
-                if not already:
-                    defs.append(df_ns)
-            df_is: Schema | None = df.item_schema
-            if df_is != None:
-                already_it: bool = False
-                si2: int = 0
-                while si2 < len(defs):
-                    if defs[si2].name == df_is.name:
-                        already_it = True
-                    si2 = si2 + 1
-                if not already_it:
-                    defs.append(df_is)
-            di = di + 1
+        if include_defs:
+            # Collect definitions for root $defs (including all nested schemas in tree)
+            defs: list[Schema] = []
+            di: int = 0
+            while di < len(self.fields):
+                df: Field = self.fields[di]
+                df_ns: Schema | None = df.nested_schema
+                if df_ns != None:
+                    already: bool = False
+                    si: int = 0
+                    while si < len(defs):
+                        if defs[si].name == df_ns.name:
+                            already = True
+                        si = si + 1
+                    if not already:
+                        defs.append(df_ns)
+                df_is: Schema | None = df.item_schema
+                if df_is != None:
+                    already_it: bool = False
+                    si2: int = 0
+                    while si2 < len(defs):
+                        if defs[si2].name == df_is.name:
+                            already_it = True
+                        si2 = si2 + 1
+                    if not already_it:
+                        defs.append(df_is)
+                di = di + 1
 
-        if len(defs) > 0:
-            w.write_key("$defs")
-            w.begin_object()
-            sdi: int = 0
-            while sdi < len(defs):
-                sub_s: Schema = defs[sdi]
-                w.write_key(sub_s.name)
-                sub_json: str = sub_s.to_json_schema()
-                sub_val: JsonValue = nox.json.parse(sub_json)
-                w.write_value(sub_val)
-                sdi = sdi + 1
-            w.end_object()
+            # Discover deeply nested schemas across collected definitions:
+            q_idx: int = 0
+            while q_idx < len(defs):
+                curr_def: Schema = defs[q_idx]
+                cfi: int = 0
+                while cfi < len(curr_def.fields):
+                    c_field: Field = curr_def.fields[cfi]
+                    c_ns: Schema | None = c_field.nested_schema
+                    if c_ns != None:
+                        already_c: bool = False
+                        csi: int = 0
+                        while csi < len(defs):
+                            if defs[csi].name == c_ns.name:
+                                already_c = True
+                            csi = csi + 1
+                        if not already_c:
+                            defs.append(c_ns)
+                    c_is: Schema | None = c_field.item_schema
+                    if c_is != None:
+                        already_cis: bool = False
+                        csi2: int = 0
+                        while csi2 < len(defs):
+                            if defs[csi2].name == c_is.name:
+                                already_cis = True
+                            csi2 = csi2 + 1
+                        if not already_cis:
+                            defs.append(c_is)
+                    cfi = cfi + 1
+                q_idx = q_idx + 1
+
+            if len(defs) > 0:
+                w.write_key("$defs")
+                w.begin_object()
+                sdi: int = 0
+                while sdi < len(defs):
+                    sub_s: Schema = defs[sdi]
+                    w.write_key(sub_s.name)
+                    sub_json: str = sub_s.to_json_schema(False)
+                    sub_val: JsonValue = nox.json.parse(sub_json)
+                    w.write_value(sub_val)
+                    sdi = sdi + 1
+                w.end_object()
 
         # Properties
         w.write_key("properties")

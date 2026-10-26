@@ -55,3 +55,54 @@ class ModelSchema[T]:
 
     def dump(self, data: ValidatedData) -> str:
         return self.schema.dump(data)
+
+    def dump_data(self, data: ValidatedData) -> str:
+        return self.schema.dump(data)
+
+    def dump_model(self, obj: T, unparser: (T) -> ValidatedData) -> str:
+        d: ValidatedData = unparser(obj)
+        return self.schema.dump(d)
+
+    def to_json(self, obj: T, unparser: (T) -> ValidatedData) -> str:
+        d: ValidatedData = unparser(obj)
+        return self.schema.dump(d)
+
+class BidirectionalModel[T]:
+    model: ModelSchema[T]
+    unparser: (T) -> ValidatedData
+
+    def __init__(self, model: ModelSchema[T], unparser: (T) -> ValidatedData) -> None:
+        self.model = model
+        self.unparser = unparser
+
+    def validate(self, v: JsonValue) -> ValidationResult:
+        return self.model.validate(v)
+
+    def validate_json(self, json_str: str) -> ValidationResult:
+        return self.model.validate_json(json_str)
+
+    def validate_row(self, row: Row) -> ValidationResult:
+        return self.model.validate_row(row)
+
+    def parse(self, v: JsonValue) -> Result[T]:
+        return self.model.parse(v)
+
+    def parse_json(self, json_str: str) -> Result[T]:
+        return self.model.parse_json(json_str)
+
+    def parse_row(self, row: Row) -> Result[T]:
+        return self.model.parse_row(row)
+
+    def dump_data(self, data: ValidatedData) -> str:
+        return self.model.dump(data)
+
+    def dump(self, obj: T) -> str:
+        u: (T) -> ValidatedData = self.unparser
+        d: ValidatedData = u(obj)
+        return self.model.schema.dump(d)
+
+    def to_json(self, obj: T) -> str:
+        return self.dump(obj)
+
+    def to_json_schema(self) -> str:
+        return self.model.schema.to_json_schema()

@@ -1,11 +1,11 @@
 # examples/nested_model.nox — Nested data models with structured paths.
 
-import schema
+import noxen
 import models
 import core
-from schema import Schema
+from noxen import Schema, ValidatedData
 from models import ModelSchema
-from core import ValidatedData, Result
+from core import Result
 
 class Address:
     city: str

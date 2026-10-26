@@ -2,14 +2,12 @@
 
 import nox.time
 from nox.time import Instant
-import schema
+import noxen
 import models
 import core
-import serialization
-from schema import Schema
-from models import ModelSchema
-from core import ValidatedData, Result
-from serialization import Serializer
+from noxen import Schema, ValidatedData, Serializer
+from models import ModelSchema, BidirectionalModel
+from core import Result
 
 class User:
     name: str
@@ -51,7 +49,15 @@ user_schema.field_str("email").email()
 def make_user(d: ValidatedData) -> User:
     return User(d.get_str("name"), d.get_int("age"), d.get_str("email"))
 
+def unparse_user(u: User) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_str("name", u.name)
+    d.set_int("age", u.age)
+    d.set_str("email", u.email)
+    return d
+
 user_model: ModelSchema[User] = ModelSchema[User](user_schema, make_user)
+user_bi: BidirectionalModel[User] = BidirectionalModel[User](user_model, unparse_user)
 
 addr_schema: Schema = Schema("Address")
 addr_schema.field_str("city")
@@ -69,11 +75,57 @@ def make_comp(d: ValidatedData) -> Company:
 
 comp_model: ModelSchema[Company] = ModelSchema[Company](comp_schema, make_comp)
 
+# Setup 4-level deep hierarchy: Enterprise -> Org -> Dept
+class Dept:
+    code: str
+    budget: int
+    def __init__(self, code: str, budget: int) -> None:
+        self.code = code
+        self.budget = budget
+
+class Org:
+    title: str
+    dept: Dept
+    def __init__(self, title: str, dept: Dept) -> None:
+        self.title = title
+        self.dept = dept
+
+class Enterprise:
+    corp_name: str
+    org: Org
+    def __init__(self, corp_name: str, org: Org) -> None:
+        self.corp_name = corp_name
+        self.org = org
+
+dept_s: Schema = Schema("Dept")
+dept_s.field_str("code")
+dept_s.field_int("budget").min_i(0)
+
+def make_dept(d: ValidatedData) -> Dept:
+    return Dept(d.get_str("code"), d.get_int("budget"))
+
+org_s: Schema = Schema("Org")
+org_s.field_str("title")
+org_s.field_object("dept", dept_s)
+
+def make_org(d: ValidatedData) -> Org:
+    return Org(d.get_str("title"), make_dept(d.get_object("dept")))
+
+ent_s: Schema = Schema("Enterprise")
+ent_s.field_str("corp_name")
+ent_s.field_object("org", org_s)
+
+def make_ent(d: ValidatedData) -> Enterprise:
+    return Enterprise(d.get_str("corp_name"), make_org(d.get_object("org")))
+
+ent_model: ModelSchema[Enterprise] = ModelSchema[Enterprise](ent_s, make_ent)
+
 flat_json: str = "{\"name\":\"Ada Lovelace\",\"age\":36,\"email\":\"ada@example.com\"}"
 nested_json: str = "{\"name\":\"Acme Corp\",\"address\":{\"city\":\"San Francisco\",\"country\":\"USA\"}}"
 invalid_json: str = "{\"name\":\"A\",\"age\":\"not-int\",\"email\":\"bad-email\"}"
+deep_json: str = "{\"corp_name\":\"OmniCorp Global\",\"org\":{\"title\":\"Engineering\",\"dept\":{\"code\":\"ENG-01\",\"budget\":5000000}}}"
 
-ITERATIONS: int = 25000
+ITERATIONS: int = 5000
 
 print("Running Noxen Benchmarks (" + str(ITERATIONS) + " iterations each)...")
 print("-----------------------------------------------------------------")
@@ -85,8 +137,10 @@ while i < ITERATIONS:
     r1: Result[User] = user_model.parse_json(flat_json)
     i = i + 1
 elapsed1: int = t1.elapsed_ms()
+if elapsed1 <= 0:
+    elapsed1 = 1
 ops_sec1: int = int((float(ITERATIONS) / (float(elapsed1) / 1000.0)))
-print("1. Flat Model Parsing:    ", elapsed1, "ms  | ", ops_sec1, "ops/sec")
+print("1. Flat Model Parsing:          ", elapsed1, "ms  | ", ops_sec1, "ops/sec")
 
 # Benchmark 2: Nested Model Parsing
 t2: Instant = nox.time.instant_now()
@@ -95,8 +149,10 @@ while j < ITERATIONS:
     r2: Result[Company] = comp_model.parse_json(nested_json)
     j = j + 1
 elapsed2: int = t2.elapsed_ms()
+if elapsed2 <= 0:
+    elapsed2 = 1
 ops_sec2: int = int((float(ITERATIONS) / (float(elapsed2) / 1000.0)))
-print("2. Nested Model Parsing:  ", elapsed2, "ms  | ", ops_sec2, "ops/sec")
+print("2. Nested Model Parsing:        ", elapsed2, "ms  | ", ops_sec2, "ops/sec")
 
 # Benchmark 3: Invalid Payload Rejection
 t3: Instant = nox.time.instant_now()
@@ -105,10 +161,12 @@ while k < ITERATIONS:
     r3: Result[User] = user_model.parse_json(invalid_json)
     k = k + 1
 elapsed3: int = t3.elapsed_ms()
+if elapsed3 <= 0:
+    elapsed3 = 1
 ops_sec3: int = int((float(ITERATIONS) / (float(elapsed3) / 1000.0)))
-print("3. Invalid Payload Reject:", elapsed3, "ms  | ", ops_sec3, "ops/sec")
+print("3. Invalid Payload Reject:      ", elapsed3, "ms  | ", ops_sec3, "ops/sec")
 
-# Benchmark 4: Model JSON Round-Trip
+# Benchmark 4: Model JSON Round-Trip (Programmatic Serializer)
 sample_user: User = User("Ada Lovelace", 36, "ada@example.com")
 t4: Instant = nox.time.instant_now()
 m: int = 0
@@ -117,7 +175,34 @@ while m < ITERATIONS:
     r4: Result[User] = user_model.parse_json(s_out)
     m = m + 1
 elapsed4: int = t4.elapsed_ms()
+if elapsed4 <= 0:
+    elapsed4 = 1
 ops_sec4: int = int((float(ITERATIONS) / (float(elapsed4) / 1000.0)))
-print("4. Full JSON Round-Trip:  ", elapsed4, "ms  | ", ops_sec4, "ops/sec")
+print("4. Full JSON Round-Trip:        ", elapsed4, "ms  | ", ops_sec4, "ops/sec")
+
+# Benchmark 5: Deeply Nested Hierarchy (3-Level Deep Model)
+t5: Instant = nox.time.instant_now()
+q: int = 0
+while q < ITERATIONS:
+    r5: Result[Enterprise] = ent_model.parse_json(deep_json)
+    q = q + 1
+elapsed5: int = t5.elapsed_ms()
+if elapsed5 <= 0:
+    elapsed5 = 1
+ops_sec5: int = int((float(ITERATIONS) / (float(elapsed5) / 1000.0)))
+print("5. Deep Hierarchy Parsing (3L): ", elapsed5, "ms  | ", ops_sec5, "ops/sec")
+
+# Benchmark 6: Bidirectional Automated Model Dump (Reflection-Free)
+t6: Instant = nox.time.instant_now()
+w: int = 0
+while w < ITERATIONS:
+    dumped: str = user_bi.to_json(sample_user)
+    w = w + 1
+elapsed6: int = t6.elapsed_ms()
+if elapsed6 <= 0:
+    elapsed6 = 1
+ops_sec6: int = int((float(ITERATIONS) / (float(elapsed6) / 1000.0)))
+print("6. Automated Model Dump (bi):   ", elapsed6, "ms  | ", ops_sec6, "ops/sec")
+
 print("-----------------------------------------------------------------")
 print("Benchmark complete.")

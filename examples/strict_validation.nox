@@ -1,9 +1,7 @@
 # examples/strict_validation.nox — Strict validation preventing unexpected fields and type coercion.
 
-import schema
-import core
-from schema import Schema, POLICY_FORBID
-from core import ValidationResult
+import noxen
+from noxen import Schema, POLICY_FORBID, ValidationResult
 
 user_schema: Schema = Schema("StrictUser")
 user_schema.field_str("username").min_length(3)
