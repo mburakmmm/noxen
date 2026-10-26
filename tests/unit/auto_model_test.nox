@@ -87,11 +87,17 @@ nox.test.assert_true(m_device.get_float("voltage") > 4.99 and m_device.get_float
 nox.test.assert_true(not m_device.get_bool("is_active"), "is_active preserved after failed parse")
 
 # -----------------------------------------------------------------------------
-# 4. In-Memory Validation Contracts: validate_current() and is_valid()
+# 4. In-Memory Validation Contracts: validate_data(), validate_current(), is_valid()
 # -----------------------------------------------------------------------------
 nox.test.assert_true(m_device.is_valid(), "m_device with complete fields is valid")
 res_cur: ValidationResult = m_device.validate_current()
 nox.test.assert_true(res_cur.is_valid, "validate_current returns valid result")
+res_data: ValidationResult = m_device.validate_data()
+nox.test.assert_true(res_data.is_valid, "validate_data direct in-memory validation returns valid")
+
+# Direct schema in-memory validation without JSON overhead
+s_dev_res: ValidationResult = m_device.schema.validate_data(m_device.data)
+nox.test.assert_true(s_dev_res.is_valid, "Schema.validate_data direct in-memory validation succeeds")
 
 m_uninit: Model = auto_model("DeviceConfig")
 nox.test.assert_true(not m_uninit.is_valid(), "Unpopulated model is not valid (missing required fields)")

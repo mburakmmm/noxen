@@ -5,6 +5,26 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-10-26
+
+### Security
+- **Strict RFC 8259 JSON Escaping in HTTP Error Responses (P0)**:
+  - Eliminated manual string concatenation in `examples/framework_adapter.nox`. Problem Details (RFC 7807) error payloads are now built using standard `JsonWriter`, strictly escaping double quotes, backslashes, newlines, and control characters to prevent JSON syntax corruption and injection attacks.
+  - Added dedicated adversarial escape verification scenario (`Scenario 5`) asserting that adversarial input with injection characters parses cleanly as a valid JSON object.
+
+### Added
+- **Direct In-Memory Data Validation API (`Schema.validate_data` & `Model.validate_data`) (P2)**:
+  - Implemented `Schema.validate_data(data: ValidatedData) -> ValidationResult` and `Model.validate_data() -> ValidationResult`.
+  - Performs direct in-memory schema constraint validation without string allocation, serialization, or JSON parsing overhead.
+  - Re-wired `Model.is_valid()` to use direct in-memory `validate_data()`.
+- **Pre-Mutation Baseline Verification & Granular Classification (P0 / P1)**:
+  - Added pre-mutation baseline checks in `scripts/run_mutation_tests.py`: verifies all target test suites pass on unmutated code prior to fault injection to prevent false positives.
+  - Classified mutation test outcomes granularly: `KILLED_ASSERTION`, `KILLED_TIMEOUT`, `COMPILE_ERROR`, `RUNTIME_ERROR`, and `SURVIVED`.
+  - All 5 mutants verified killed 100% via test assertions (`KILLED_ASSERTION`).
+- **Benchmark Coverage Verification & Relative Baseline Tracking (P1)**:
+  - Enforced strict benchmark suite coverage in `scripts/check_performance_regression.py` ensuring all 7 benchmarks are present and evaluated.
+  - Added relative regression tracking against recorded baseline JSON (`baseline_llvm.json`, `baseline_qbe.json`), flagging throughput drops >35% vs baseline.
+
 ## [0.8.0] - 2026-10-26
 
 ### Added

@@ -8,6 +8,7 @@
 
 import nox.test
 import nox.json
+from nox.json import JsonWriter, JsonValue
 import noxen
 from noxen import Schema, Field, Model, auto_model, ValidationResult, FieldError
 from noxen import POLICY_FORBID, CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE
@@ -63,20 +64,35 @@ class UserResponse:
         self.status = status
 
 # -----------------------------------------------------------------------------
-# 3. HTTP Controller Endpoint with Noxen Validation
+# 3. HTTP Controller Endpoint with Noxen Validation & Safe JSON Escaping
 # -----------------------------------------------------------------------------
 def format_rfc7807_error(errors: list[FieldError]) -> str:
-    # Formats machine-readable RFC 7807 Problem Details JSON
-    msg: str = "{\"type\":\"https://noxlang.com/errors/validation\",\"title\":\"Validation Failed\",\"status\":400,\"errors\":["
+    # Formats machine-readable RFC 7807 Problem Details JSON using standard JsonWriter with strict RFC 8259 escaping
+    w: JsonWriter = JsonWriter()
+    w.begin_object()
+    w.write_key("type")
+    w.write_string("https://noxlang.com/errors/validation")
+    w.write_key("title")
+    w.write_string("Validation Failed")
+    w.write_key("status")
+    w.write_int(400)
+    w.write_key("errors")
+    w.begin_array()
     ei: int = 0
     while ei < len(errors):
         err: FieldError = errors[ei]
-        if ei > 0:
-            msg = msg + ","
-        msg = msg + "{\"field\":\"" + err.path + "\",\"code\":\"" + err.code + "\",\"message\":\"" + err.message + "\"}"
+        w.begin_object()
+        w.write_key("field")
+        w.write_string(err.path)
+        w.write_key("code")
+        w.write_string(err.code)
+        w.write_key("message")
+        w.write_string(err.message)
+        w.end_object()
         ei = ei + 1
-    msg = msg + "]}"
-    return msg
+    w.end_array()
+    w.end_object()
+    return w.build()
 
 def handle_create_user(req: AppRequest) -> AppResponse:
     if req.method != "POST":
@@ -171,6 +187,20 @@ resp4: AppResponse = handle_create_user(malformed_req)
 reqs_handled = reqs_handled + 1
 nox.test.assert_eq_int(resp4.status_code, 400, "Syntax error rejected with HTTP 400")
 nox.test.assert_true(nox.strings.contains(resp4.body, "invalid_json"), "RFC 7807 reports invalid_json")
+c_400 = c_400 + 1
+
+# Scenario 5: Adversarial Payload with Special Escaping Characters (P0 Security Check)
+adversarial_req: AppRequest = AppRequest(
+    "POST",
+    "/api/v1/users",
+    "{\"username\":\"hack\\\"injection\\n\\t\\\\\",\"email\":\"bad_email\",\"age\":5,\"role\":\"intruder\"}"
+)
+resp5: AppResponse = handle_create_user(adversarial_req)
+reqs_handled = reqs_handled + 1
+nox.test.assert_eq_int(resp5.status_code, 400, "Adversarial payload rejected with HTTP 400")
+# Crucial: verify that the resulting error response is 100% syntactically valid JSON (no unescaped quotes/newlines)
+parsed_err_json: JsonValue = nox.json.parse(resp5.body)
+nox.test.assert_true(nox.json.is_object(parsed_err_json), "Escaped RFC 7807 response strictly parses as valid JSON object")
 c_400 = c_400 + 1
 
 print("NOXEN_RESULT_JSON:{\"example\":\"framework_adapter\",\"valid\":true,\"requests_handled\":" + str(reqs_handled) + ",\"status_201\":" + str(c_201) + ",\"status_400\":" + str(c_400) + "}")

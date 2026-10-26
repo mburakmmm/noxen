@@ -7,7 +7,7 @@ import validators
 import core
 from core import ValidatedData, ValidationResult
 import serialization
-from serialization import Serializer
+from serialization import Serializer, is_finite_float
 import nox.json
 import nox.regex
 import nox.strings
@@ -1193,6 +1193,149 @@ class Schema:
             errs: list[FieldError] = []
             errs.append(FieldError("root", CODE_INVALID_JSON, "Malformed JSON syntax: " + e.message, "valid JSON", "syntax error"))
             return ValidationResult(False, data, errs)
+
+    # In-memory validation of an existing ValidatedData instance against schema constraints (zero JSON overhead)
+    def validate_data_at(self: Schema, data: ValidatedData, prefix: str, depth: int) -> ValidationResult:
+        err_list: list[FieldError] = []
+
+        if depth > self.max_depth:
+            err_list.append(
+                FieldError(prefix, CODE_RECURSION_LIMIT, "Maximum nesting depth (" + str(self.max_depth) + ") exceeded", "depth <= " + str(self.max_depth), str(depth))
+            )
+            return ValidationResult(False, data, err_list)
+
+        fi: int = 0
+        while fi < len(self.fields):
+            field: Field = self.fields[fi]
+            full_path: str = field.name
+            if prefix != "":
+                full_path = prefix + "." + field.name
+
+            has_field: bool = data.has(field.name)
+            is_null_val: bool = data.is_null(field.name)
+
+            if not has_field and not is_null_val:
+                # Field missing
+                if field.mode == MODE_REQUIRED or field.mode == MODE_REQUIRED_NULLABLE:
+                    if not field.has_default:
+                        err_list.append(FieldError(full_path, CODE_MISSING_FIELD, "Missing required field: '" + full_path + "'", "value", "missing"))
+            elif is_null_val:
+                # Field is explicitly null
+                if field.mode == MODE_REQUIRED or field.mode == MODE_OPTIONAL:
+                    err_list.append(FieldError(full_path, CODE_UNEXPECTED_NULL, "Field '" + full_path + "' cannot be null", "non-null", "null"))
+            else:
+                # Field is present and non-null
+                if field.kind == "string":
+                    sv: str = data.get_str(field.name)
+                    if field.has_min_len and len(sv) < field.min_len:
+                        err_list.append(FieldError(full_path, CODE_STRING_TOO_SHORT, "Field '" + full_path + "' must be at least " + str(field.min_len) + " characters", "len >= " + str(field.min_len), str(len(sv))))
+                    if field.has_max_len and len(sv) > field.max_len:
+                        err_list.append(FieldError(full_path, CODE_STRING_TOO_LONG, "Field '" + full_path + "' must be at most " + str(field.max_len) + " characters", "len <= " + str(field.max_len), str(len(sv))))
+                    if len(field.choices) > 0:
+                        matched_ch: bool = False
+                        chi: int = 0
+                        while chi < len(field.choices):
+                            if field.choices[chi] == sv:
+                                matched_ch = True
+                            chi = chi + 1
+                        if not matched_ch:
+                            err_list.append(FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed choices", "choice", sv))
+                    if len(field.pattern) > 0 and not nox.regex.is_match(field.pattern, sv):
+                        err_list.append(FieldError(full_path, CODE_PATTERN_MISMATCH, "Field '" + full_path + "' does not match pattern: " + field.pattern, field.pattern, sv))
+                    if field.fmt == "email" and not validators.is_valid_email(sv):
+                        err_list.append(FieldError(full_path, CODE_INVALID_EMAIL, "Field '" + full_path + "' is not a valid email address", "email", sv))
+                    if field.fmt == "url" and not validators.is_valid_url(sv):
+                        err_list.append(FieldError(full_path, CODE_INVALID_URL, "Field '" + full_path + "' is not a valid absolute URL", "url", sv))
+                    if field.fmt == "uuid" and not validators.is_valid_uuid(sv):
+                        err_list.append(FieldError(full_path, CODE_INVALID_UUID, "Field '" + full_path + "' is not a valid UUID", "uuid", sv))
+                    if field.fmt == "date" and not validators.is_valid_date(sv):
+                        err_list.append(FieldError(full_path, CODE_INVALID_DATE, "Field '" + full_path + "' is not a valid ISO 8601 date (YYYY-MM-DD)", "date", sv))
+                    if field.fmt == "time" and not validators.is_valid_time(sv):
+                        err_list.append(FieldError(full_path, CODE_INVALID_TIME, "Field '" + full_path + "' is not a valid ISO 8601 time (HH:MM:SS)", "time", sv))
+                    if field.fmt == "date-time" and not validators.is_valid_datetime(sv):
+                        err_list.append(FieldError(full_path, CODE_INVALID_DATETIME, "Field '" + full_path + "' is not a valid ISO 8601 datetime", "date-time", sv))
+
+                elif field.kind == "int":
+                    iv: int = data.get_int(field.name)
+                    if field.has_min_int:
+                        if field.is_exclusive_min and iv <= field.min_val_int:
+                            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val_int), "> " + str(field.min_val_int), str(iv)))
+                        elif not field.is_exclusive_min and iv < field.min_val_int:
+                            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val_int), ">= " + str(field.min_val_int), str(iv)))
+                    if field.has_max_int:
+                        if field.is_exclusive_max and iv >= field.max_val_int:
+                            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val_int), "< " + str(field.max_val_int), str(iv)))
+                        elif not field.is_exclusive_max and iv > field.max_val_int:
+                            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val_int), "<= " + str(field.max_val_int), str(iv)))
+                    if len(field.choices_int) > 0:
+                        matched_chi: bool = False
+                        chii: int = 0
+                        while chii < len(field.choices_int):
+                            if field.choices_int[chii] == iv:
+                                matched_chi = True
+                            chii = chii + 1
+                        if not matched_chi:
+                            err_list.append(FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed integer choices", "int choice", str(iv)))
+
+                elif field.kind == "float":
+                    fv: float = data.get_float(field.name)
+                    if not is_finite_float(fv):
+                        err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected finite float, got non-finite value", "finite float", str(fv)))
+                    if field.has_min:
+                        if field.is_exclusive_min and fv <= field.min_val:
+                            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val), "> " + str(field.min_val), str(fv)))
+                        elif not field.is_exclusive_min and fv < field.min_val:
+                            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(fv)))
+                    if field.has_max:
+                        if field.is_exclusive_max and fv >= field.max_val:
+                            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val), "< " + str(field.max_val), str(fv)))
+                        elif not field.is_exclusive_max and fv > field.max_val:
+                            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(fv)))
+
+                elif field.kind == "object":
+                    sub_s: Schema | None = field.nested_schema
+                    if sub_s is not None:
+                        sub_data: ValidatedData = data.get_object(field.name)
+                        sub_res: ValidationResult = sub_s.validate_data_at(sub_data, full_path, depth + 1)
+                        if not sub_res.is_valid:
+                            si: int = 0
+                            while si < len(sub_res.errors):
+                                err_list.append(sub_res.errors[si])
+                                si = si + 1
+
+                elif field.kind == "list":
+                    if field.item_kind == "object":
+                        is_sub: Schema | None = field.item_schema
+                        if is_sub is not None:
+                            sub_objs: list[ValidatedData] = data.get_list_object(field.name)
+                            j: int = 0
+                            while j < len(sub_objs):
+                                item_pfx: str = full_path + "[" + str(j) + "]"
+                                item_res: ValidationResult = is_sub.validate_data_at(sub_objs[j], item_pfx, depth + 1)
+                                if not item_res.is_valid:
+                                    k: int = 0
+                                    while k < len(item_res.errors):
+                                        err_list.append(item_res.errors[k])
+                                        k = k + 1
+                                j = j + 1
+
+            fi = fi + 1
+
+        # Run custom validators
+        cvi: int = 0
+        while cvi < len(self.custom_validators):
+            cv: (ValidatedData) -> list[FieldError] = self.custom_validators[cvi]
+            extra_errs: list[FieldError] = cv(data)
+            eei: int = 0
+            while eei < len(extra_errs):
+                err_list.append(extra_errs[eei])
+                eei = eei + 1
+            cvi = cvi + 1
+
+        return ValidationResult(len(err_list) == 0, data, err_list)
+
+    def validate_data(self: Schema, data: ValidatedData) -> ValidationResult:
+        return self.validate_data_at(data, "", 0)
 
     def dump(self: Schema, data: ValidatedData) -> str:
         s: Serializer = Serializer()

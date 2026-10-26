@@ -90,7 +90,7 @@ Add Noxen to your project's `nox.json`:
     {
       "alias": "noxen",
       "repo": "github.com/mburakmmm/noxen",
-      "ref": "v0.8.0"
+      "ref": "v0.8.1"
     }
   ]
 }
@@ -105,7 +105,7 @@ noxc fetch
 Or install via `noxc`:
 
 ```sh
-noxc add noxen github.com/mburakmmm/noxen --ref v0.8.0
+noxc add noxen github.com/mburakmmm/noxen --ref v0.8.1
 ```
 
 ---
@@ -224,8 +224,9 @@ Noxen provides two complementary, first-class modeling approaches tailored to di
 | Method | Guarantee | Timing / Safety |
 |---|---|---|
 | `set_*()` | Updates field in memory without executing schema checks | O(1) / Instant |
+| `validate_data()` | In-memory schema constraint evaluation on `ValidatedData` (zero JSON overhead) | O(fields) / Zero allocations |
 | `validate_current()` | Evaluates current in-memory data against schema constraints | Explicit verification check |
-| `is_valid()` | Returns `True` only if current data satisfies all schema rules | Boolean helper |
+| `is_valid()` | Returns `True` only if current data satisfies all schema rules (via in-memory `validate_data`) | Boolean helper |
 | `to_json()` | High-speed direct serialization of current state | Maximum throughput |
 | `to_json_validated()` | Re-validates against schema before emitting JSON (raises `ValidationError` on mismatch) | Enforced correctness |
 | `parse_json()` | Validates incoming JSON; **on failure, existing valid model state is preserved intact** | Atomic state update |

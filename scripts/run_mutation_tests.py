@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
 scripts/run_mutation_tests.py
-Automated mutation testing for Noxen with isolated temporary workspace and timeout guards.
-
-Introduces controlled faults into core validation & serialization logic and verifies
-that the test suite immediately catches and kills each mutant.
+Automated mutation testing for Noxen with baseline pre-checks, isolated temporary workspace,
+and granular outcome classification (Assertion, Timeout, Compilation, Runtime).
 
 Security & Reliability Guarantees:
+- Pre-mutation baseline verification: verifies all target test suites pass cleanly on unmutated code
+  to guarantee zero false positives.
 - Never modifies working tree files in-place: copies files to a temporary workspace
   (tempfile.TemporaryDirectory) so repository code is NEVER corrupted or dirtied.
 - Enforces strict execution timeout (20s) to kill infinite loops and recursive cycle mutants.
-- Distinguishes kill reasons (assertion failure vs timeout vs compilation error).
+- Granular outcome classification: KILLED_ASSERTION, KILLED_TIMEOUT, COMPILE_ERROR, RUNTIME_ERROR, SURVIVED.
 """
 
 import os
@@ -78,15 +78,38 @@ def main() -> int:
     print("=== Noxen Automated Mutation Testing (Isolated Workspace) ===")
     print(f"Compiler binary: {noxc_cmd}")
     print(f"Repository root: {repo_root}")
-    print(f"Total Mutants: {len(MUTATIONS)}\n")
+    print(f"Total Mutants:   {len(MUTATIONS)}\n")
 
-    killed = 0
+    killed_assertion = 0
+    killed_timeout = 0
+    compile_errors = 0
+    runtime_errors = 0
     survived = 0
 
     with tempfile.TemporaryDirectory(prefix="noxen_mut_") as tmp_workspace:
         print(f"Created isolated temporary mutation workspace: {tmp_workspace}")
         copy_repo_to_workspace(repo_root, tmp_workspace)
 
+        # Baseline Pre-check: Ensure all target test suites pass cleanly on unmutated code
+        print("\n--- Baseline Pre-Check: Verifying unmutated test suites pass ---")
+        tests_to_check = sorted(list(set(m["test"] for m in MUTATIONS)))
+        for t in tests_to_check:
+            res_base = subprocess.run(
+                [noxc_cmd, "run", t],
+                cwd=tmp_workspace,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            if res_base.returncode != 0:
+                print(f"[FAIL] Baseline test '{t}' failed before mutation! (exit code {res_base.returncode})")
+                print(res_base.stdout)
+                print(res_base.stderr)
+                return 1
+            print(f"  [BASELINE OK] {t} passed cleanly")
+        print("Baseline pre-check complete. All target suites verified healthy.\n")
+
+        # Apply and evaluate each mutant
         for i, m in enumerate(MUTATIONS, 1):
             name = m["name"]
             rel_file = m["file"]
@@ -119,36 +142,46 @@ def main() -> int:
 
                 if res.returncode != 0:
                     output_combined = (res.stdout or "") + (res.stderr or "")
-                    if "AssertionError" in output_combined or "assertion failed" in output_combined.lower() or "assert" in output_combined:
-                        print(f"    [KILLED (Assertion Failure)] Test '{rel_test}' caught mutant (exit code {res.returncode})!")
+                    if "syntax error:" in output_combined.lower() or "type error:" in output_combined.lower():
+                        compile_errors += 1
+                        print(f"    [COMPILE_ERROR] Test '{rel_test}' failed with compiler error (exit code {res.returncode})")
+                    elif "assertionerror" in output_combined.lower() or "assert" in output_combined.lower() or res.returncode == 1:
+                        killed_assertion += 1
+                        print(f"    [KILLED_ASSERTION] Test '{rel_test}' caught mutant via assertion failure (exit code {res.returncode})!")
                     else:
-                        print(f"    [KILLED (Validation / Error Triggered)] Test '{rel_test}' caught mutant (exit code {res.returncode})!")
-                    killed += 1
+                        runtime_errors += 1
+                        print(f"    [RUNTIME_ERROR] Test '{rel_test}' caught mutant via runtime error (exit code {res.returncode})!")
                 else:
                     print(f"    [SURVIVED] WARNING: Test '{rel_test}' passed despite mutation!")
                     survived += 1
 
             except subprocess.TimeoutExpired:
-                print(f"    [KILLED (Timeout / Infinite Loop Prevented)] Test '{rel_test}' timed out after 20s!")
-                killed += 1
+                killed_timeout += 1
+                print(f"    [KILLED_TIMEOUT] Test '{rel_test}' timed out after 20s (infinite loop prevented)!")
 
             finally:
                 # Restore original file inside temp workspace for the next mutant
                 with open(target_file, "w", encoding="utf-8") as f:
                     f.write(content)
 
-    mutation_score = (killed / len(MUTATIONS)) * 100.0
-    print(f"\nMutation Testing Results:")
-    print(f"  Mutants Killed:   {killed}")
-    print(f"  Mutants Survived: {survived}")
-    print(f"  Mutation Score:   {mutation_score:.1f}%")
+    total_killed = killed_assertion + killed_timeout + runtime_errors
+    mutation_score = (total_killed / len(MUTATIONS)) * 100.0
+
+    print(f"\nMutation Testing Summary:")
+    print(f"  Killed by Assertion: {killed_assertion}")
+    print(f"  Killed by Timeout:   {killed_timeout}")
+    print(f"  Compiler Errors:     {compile_errors}")
+    print(f"  Runtime Errors:      {runtime_errors}")
+    print(f"  Mutants Survived:    {survived}")
+    print(f"  Total Mutants:       {len(MUTATIONS)}")
+    print(f"  Mutation Score:      {mutation_score:.1f}%")
 
     if survived > 0:
-        print("[FAIL] Some mutants survived. Strengthen test assertions!")
+        print("\n[FAIL] Some mutants survived. Strengthen test assertions!")
         return 1
 
     print("\nALL MUTANTS SUCCESSFULLY KILLED! Test suite has high fault-detection coverage.")
-    print("Repository working tree remained 100% clean and untouched throughout execution.")
+    print("Pre-mutation baseline verified and repository working tree remained 100% clean.")
     return 0
 
 if __name__ == "__main__":
