@@ -1,0 +1,210 @@
+# validate_data_parity_test.nox — In-memory validation parity & checked serialization test.
+
+import nox.test
+import schema
+import models
+import core
+import errors
+from schema import Schema
+from models import Model, ModelSchema, BidirectionalModel
+from core import ValidatedData, ValidationResult
+from errors import FieldError
+
+# ----------------------------------------------------------------------
+# 1. Schema setup with strings, ints, floats, lists, and nested objects
+# ----------------------------------------------------------------------
+addr_s: Schema = Schema("Address")
+addr_s.field_str("street").min_length(3)
+addr_s.field_str("city").min_length(2)
+addr_s.field_int("zip").min_i(10000).max_i(99999)
+
+user_roles: list[str] = ["admin", "user", "guest"]
+
+user_s: Schema = Schema("User")
+user_s.field_str("name").min_length(2).max_length(50)
+user_s.field_str("email").email()
+user_s.field_str("role").in_choices(user_roles)
+user_s.field_int("age").min_i(18).max_i(120)
+user_s.field_float("score").min(0.0).max(100.0)
+user_s.field_bool("active")
+user_s.field_list("tags", "string").min_items(1).max_items(5)
+user_s.field_list("scores", "int").min_items(1).max_items(3)
+user_s.field_object("address", addr_s)
+
+# Helper to build a fully valid ValidatedData instance
+def make_valid_data() -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_str("name", "Ada Lovelace")
+    d.set_str("email", "ada@example.com")
+    d.set_str("role", "admin")
+    d.set_int("age", 36)
+    d.set_float("score", 98.5)
+    d.set_bool("active", True)
+    
+    tags: list[str] = ["math", "computing"]
+    d.set_list_str("tags", tags)
+    
+    scores: list[int] = [100, 95]
+    d.set_list_int("scores", scores)
+    
+    addr: ValidatedData = ValidatedData()
+    addr.set_str("street", "12 St James Square")
+    addr.set_str("city", "London")
+    addr.set_int("zip", 12345)
+    d.set_object("address", addr)
+    return d
+
+# ----------------------------------------------------------------------
+# Test 1: Full differential parity on a valid instance
+# ----------------------------------------------------------------------
+valid_d: ValidatedData = make_valid_data()
+
+# In-memory validation
+res_mem: ValidationResult = user_s.validate_data(valid_d)
+nox.test.assert_true(res_mem.is_valid, "validate_data accepts valid data")
+nox.test.assert_eq_int(len(res_mem.errors), 0, "no errors in in-memory validation")
+
+# JSON path validation
+dumped_json: str = user_s.dump(valid_d)
+res_json: ValidationResult = user_s.validate_json(dumped_json)
+nox.test.assert_true(res_json.is_valid, "validate_json accepts dumped valid data")
+nox.test.assert_eq_int(len(res_json.errors), 0, "no errors in json validation")
+
+# Parity assertion
+nox.test.assert_true(res_mem.is_valid == res_json.is_valid, "parity: both paths accept valid instance")
+
+# ----------------------------------------------------------------------
+# Test 2: String constraint parity (too short, bad email, bad choice)
+# ----------------------------------------------------------------------
+bad_str_d: ValidatedData = make_valid_data()
+bad_str_d.set_str("name", "A") # too short (< 2)
+bad_str_d.set_str("email", "not-an-email") # invalid email
+bad_str_d.set_str("role", "superadmin") # invalid choice
+
+res_bad_str_mem: ValidationResult = user_s.validate_data(bad_str_d)
+nox.test.assert_true(not res_bad_str_mem.is_valid, "validate_data rejects invalid strings")
+nox.test.assert_eq_int(len(res_bad_str_mem.errors), 3, "detects all 3 string errors in memory")
+
+res_bad_str_json: ValidationResult = user_s.validate_json(user_s.dump(bad_str_d))
+nox.test.assert_true(not res_bad_str_json.is_valid, "validate_json rejects invalid strings")
+nox.test.assert_eq_int(len(res_bad_str_json.errors), 3, "detects all 3 string errors via JSON")
+
+# Check error codes match
+nox.test.assert_eq_str(res_bad_str_mem.errors[0].code, res_bad_str_json.errors[0].code, "string_too_short parity")
+nox.test.assert_eq_str(res_bad_str_mem.errors[1].code, res_bad_str_json.errors[1].code, "invalid_email parity")
+nox.test.assert_eq_str(res_bad_str_mem.errors[2].code, res_bad_str_json.errors[2].code, "choice_mismatch parity")
+
+# ----------------------------------------------------------------------
+# Test 3: Numeric bounds parity (int & float)
+# ----------------------------------------------------------------------
+bad_num_d: ValidatedData = make_valid_data()
+bad_num_d.set_int("age", 15) # min_i is 18
+bad_num_d.set_float("score", 150.0) # max is 100.0
+
+res_bad_num_mem: ValidationResult = user_s.validate_data(bad_num_d)
+nox.test.assert_true(not res_bad_num_mem.is_valid, "validate_data rejects out-of-range numbers")
+nox.test.assert_eq_int(len(res_bad_num_mem.errors), 2, "detects 2 numeric errors in memory")
+
+res_bad_num_json: ValidationResult = user_s.validate_json(user_s.dump(bad_num_d))
+nox.test.assert_true(not res_bad_num_json.is_valid, "validate_json rejects out-of-range numbers")
+nox.test.assert_eq_int(len(res_bad_num_json.errors), 2, "detects 2 numeric errors via JSON")
+nox.test.assert_eq_str(res_bad_num_mem.errors[0].code, res_bad_num_json.errors[0].code, "out_of_range int parity")
+nox.test.assert_eq_str(res_bad_num_mem.errors[1].code, res_bad_num_json.errors[1].code, "out_of_range float parity")
+
+# ----------------------------------------------------------------------
+# Test 4: List size & item constraints in memory
+# ----------------------------------------------------------------------
+bad_list_d: ValidatedData = make_valid_data()
+empty_tags: list[str] = []
+bad_list_d.set_list_str("tags", empty_tags) # min_items is 1
+
+res_bad_list_mem: ValidationResult = user_s.validate_data(bad_list_d)
+nox.test.assert_true(not res_bad_list_mem.is_valid, "validate_data rejects array_too_short")
+nox.test.assert_eq_str(res_bad_list_mem.errors[0].code, "array_too_short", "array_too_short error code")
+
+# ----------------------------------------------------------------------
+# Test 5: Nested object validation in memory
+# ----------------------------------------------------------------------
+bad_addr_d: ValidatedData = make_valid_data()
+bad_addr: ValidatedData = ValidatedData()
+bad_addr.set_str("street", "X") # min_len 3
+bad_addr.set_str("city", "London")
+bad_addr.set_int("zip", 999) # min_i 10000
+bad_addr_d.set_object("address", bad_addr)
+
+res_bad_addr_mem: ValidationResult = user_s.validate_data(bad_addr_d)
+nox.test.assert_true(not res_bad_addr_mem.is_valid, "validate_data rejects nested object errors")
+nox.test.assert_eq_int(len(res_bad_addr_mem.errors), 2, "nested errors accumulated")
+nox.test.assert_eq_str(res_bad_addr_mem.errors[0].path, "address.street", "nested path formatted correctly")
+nox.test.assert_eq_str(res_bad_addr_mem.errors[1].path, "address.zip", "nested path formatted correctly")
+
+# ----------------------------------------------------------------------
+# Test 6: POLICY_FORBID unknown-field rejection in memory
+# ----------------------------------------------------------------------
+unknown_d: ValidatedData = make_valid_data()
+unknown_d.set_str("unexpected_extra", "malicious_payload")
+
+res_unknown_mem: ValidationResult = user_s.validate_data(unknown_d)
+nox.test.assert_true(not res_unknown_mem.is_valid, "POLICY_FORBID rejects extra keys in memory")
+nox.test.assert_eq_int(len(res_unknown_mem.errors), 1, "extra field error generated")
+nox.test.assert_eq_str(res_unknown_mem.errors[0].code, "extra_field", "extra_field code")
+nox.test.assert_eq_str(res_unknown_mem.errors[0].path, "unexpected_extra", "extra field path")
+
+# ----------------------------------------------------------------------
+# Test 7: Systematic in-memory type safety (int stored under string key)
+# ----------------------------------------------------------------------
+mismatch_d: ValidatedData = ValidatedData()
+mismatch_d.set_int("name", 12345) # schema expects string!
+mismatch_d.set_str("email", "test@example.com")
+mismatch_d.set_str("role", "user")
+mismatch_d.set_int("age", 25)
+mismatch_d.set_float("score", 50.0)
+mismatch_d.set_bool("active", True)
+t_list: list[str] = ["tag1"]
+mismatch_d.set_list_str("tags", t_list)
+s_list: list[int] = [10]
+mismatch_d.set_list_int("scores", s_list)
+mismatch_addr: ValidatedData = ValidatedData()
+mismatch_addr.set_str("street", "Main St")
+mismatch_addr.set_str("city", "Town")
+mismatch_addr.set_int("zip", 55555)
+mismatch_d.set_object("address", mismatch_addr)
+
+res_mismatch_mem: ValidationResult = user_s.validate_data(mismatch_d)
+nox.test.assert_true(not res_mismatch_mem.is_valid, "type mismatch caught safely in memory")
+nox.test.assert_eq_str(res_mismatch_mem.errors[0].code, "type_mismatch", "type_mismatch code")
+nox.test.assert_eq_str(res_mismatch_mem.errors[0].path, "name", "name path for mismatch")
+
+# ----------------------------------------------------------------------
+# Test 8: dump_checked & to_json_checked functionality
+# ----------------------------------------------------------------------
+# Valid dump_checked
+valid_dump: str = user_s.dump_checked(valid_d)
+nox.test.assert_true(len(valid_dump) > 0, "dump_checked serializes valid data")
+
+# Invalid dump_checked raises ValueError
+threw_on_invalid: bool = False
+try:
+    user_s.dump_checked(bad_str_d)
+except ValueError:
+    threw_on_invalid = True
+nox.test.assert_true(threw_on_invalid, "dump_checked raises ValueError on constraint violation")
+
+# Model fluent wrapper dump_checked
+m: Model = Model(user_s, valid_d)
+nox.test.assert_true(m.is_valid(), "model is_valid returns true")
+model_checked_json: str = m.dump_checked()
+nox.test.assert_eq_str(model_checked_json, valid_dump, "model dump_checked matches schema dump_checked")
+
+# Mutate model to invalid and verify is_valid() and dump_checked()
+m.set_int("age", 5) # below 18
+nox.test.assert_true(not m.is_valid(), "model is_valid returns false after invalid mutation")
+model_threw: bool = False
+try:
+    m.dump_checked()
+except ValueError:
+    model_threw = True
+nox.test.assert_true(model_threw, "model dump_checked raises ValueError on invalid model state")
+
+print('NOXEN_RESULT_JSON:{"test":"validate_data_parity","valid":true,"parity_cases_verified":8,"dump_checked_verified":true}')
+print("validate_data_parity_test passed")

@@ -37,6 +37,14 @@ BASE_PERFORMANCE_FLOORS = {
     "Validated Model Dump": 150000,
 }
 
+def get_platform_key() -> str:
+    """Returns platform identifier string for platform-isolated baselines."""
+    if sys.platform == "win32" or os.environ.get("RUNNER_OS") == "Windows":
+        return "windows"
+    if sys.platform == "darwin" or os.environ.get("RUNNER_OS") == "macOS":
+        return "darwin"
+    return "linux"
+
 def get_platform_factor() -> float:
     """Returns calibration multiplier for the current OS and CI environment."""
     # Windows GitHub Actions runners have coarse timer granularity (~15ms) and VM scheduling jitter
@@ -51,10 +59,19 @@ def main() -> int:
     parser.add_argument("--update-baseline", action="store_true", help="Update recorded baseline results")
     args = parser.parse_args()
 
+    platform_key = get_platform_key()
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     benchmarks_dir = os.path.join(repo_root, "benchmarks")
-    baseline_file = os.path.join(benchmarks_dir, f"baseline_{args.backend}.json")
-    latest_file = os.path.join(benchmarks_dir, f"latest_{args.backend}.json")
+    baseline_file = os.path.join(benchmarks_dir, f"baseline_{platform_key}_{args.backend}.json")
+    latest_file = os.path.join(benchmarks_dir, f"latest_{platform_key}_{args.backend}.json")
+
+    # Fallback to non-platform-specific baseline if platform baseline does not exist yet
+    if not os.path.exists(baseline_file):
+        legacy_baseline = os.path.join(benchmarks_dir, f"baseline_{args.backend}.json")
+        if os.path.exists(legacy_baseline):
+            # Only use legacy baseline if running on matching host (darwin)
+            if platform_key == "darwin":
+                baseline_file = legacy_baseline
 
     platform_factor = args.factor if args.factor is not None else get_platform_factor()
     backend_factor = 0.8 if args.backend == "qbe" else 1.0
@@ -64,8 +81,9 @@ def main() -> int:
     print("=== Noxen Performance Regression Gate ===")
     print(f"Compiler binary:    {noxc_cmd}")
     print(f"Target Backend:     {args.backend.upper()}")
-    print(f"Platform:           {sys.platform} (factor: {platform_factor:.2f})")
-    print(f"Effective factor:   {combined_factor:.2f}\n")
+    print(f"Platform:           {platform_key} ({sys.platform}, factor: {platform_factor:.2f})")
+    print(f"Effective factor:   {combined_factor:.2f}")
+    print(f"Baseline file:      {os.path.basename(baseline_file)}\n")
 
     cmd = [noxc_cmd, "run", "benchmarks/run_benchmarks.nox"]
     if args.backend == "qbe":

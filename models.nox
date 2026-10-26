@@ -80,6 +80,17 @@ class ModelSchema[T]:
         d: ValidatedData = unparser(obj)
         return self.schema.dump_validated(d)
 
+    def dump_checked(self, data: ValidatedData) -> str:
+        return self.schema.dump_checked(data)
+
+    def dump_model_checked(self, obj: T, unparser: (T) -> ValidatedData) -> str:
+        d: ValidatedData = unparser(obj)
+        return self.schema.dump_checked(d)
+
+    def to_json_checked(self, obj: T, unparser: (T) -> ValidatedData) -> str:
+        d: ValidatedData = unparser(obj)
+        return self.schema.dump_checked(d)
+
 class BidirectionalModel[T]:
     model: ModelSchema[T]
     unparser: (T) -> ValidatedData
@@ -130,6 +141,14 @@ class BidirectionalModel[T]:
 
     def to_json_validated(self, obj: T) -> str:
         return self.dump_validated(obj)
+
+    def dump_checked(self, obj: T) -> str:
+        u: (T) -> ValidatedData = self.unparser
+        d: ValidatedData = u(obj)
+        return self.model.schema.dump_checked(d)
+
+    def to_json_checked(self, obj: T) -> str:
+        return self.dump_checked(obj)
 
     def to_json_schema(self) -> str:
         return self.model.schema.to_json_schema()
@@ -192,6 +211,12 @@ class Model:
 
     def to_json_validated(self: Model) -> str:
         return self.schema.dump_validated(self.data)
+
+    def dump_checked(self: Model) -> str:
+        return self.schema.dump_checked(self.data)
+
+    def to_json_checked(self: Model) -> str:
+        return self.schema.dump_checked(self.data)
 
     def to_json_schema(self: Model) -> str:
         return self.schema.to_json_schema()

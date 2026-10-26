@@ -325,6 +325,124 @@ class ValidatedData:
             idx = idx + 1
         return res
 
+    # ------------------------------------------------------------------
+    # Typed presence introspection (used by in-memory validation, v0.8.2)
+    #
+    # A key can be *present* (`has`) yet stored in a container of a different
+    # kind than the schema declares (e.g. an int stored under a string field).
+    # These predicates let `Schema.validate_data` detect that systematically
+    # instead of crashing on a dictionary lookup.
+    # ------------------------------------------------------------------
+    def has_str(self: ValidatedData, k: str) -> bool:
+        return self.has(k) and ((self._prefix + k) in self._strs)
+
+    def has_int(self: ValidatedData, k: str) -> bool:
+        return self.has(k) and ((self._prefix + k) in self._ints)
+
+    def has_float(self: ValidatedData, k: str) -> bool:
+        return self.has(k) and ((self._prefix + k) in self._floats)
+
+    def has_bool(self: ValidatedData, k: str) -> bool:
+        return self.has(k) and ((self._prefix + k) in self._bools)
+
+    def has_list_str(self: ValidatedData, k: str) -> bool:
+        return self.has(k) and ((self._prefix + k) in self._list_strs)
+
+    def has_list_int(self: ValidatedData, k: str) -> bool:
+        return self.has(k) and ((self._prefix + k) in self._list_ints)
+
+    def has_list_float(self: ValidatedData, k: str) -> bool:
+        return self.has(k) and ((self._prefix + k) in self._list_floats)
+
+    def has_list_bool(self: ValidatedData, k: str) -> bool:
+        return self.has(k) and ((self._prefix + k) in self._list_bools)
+
+    def has_list_object(self: ValidatedData, k: str) -> bool:
+        return self.has(k) and ((self._prefix + k) in self._list_objs_len)
+
+    # Length of the list stored under `k` regardless of element kind, or -1 when `k` holds no list.
+    def list_len(self: ValidatedData, k: str) -> int:
+        pk: str = self._prefix + k
+        if not self.has(k):
+            return -1
+        if pk in self._list_strs:
+            return len(self._list_strs[pk])
+        if pk in self._list_ints:
+            return len(self._list_ints[pk])
+        if pk in self._list_floats:
+            return len(self._list_floats[pk])
+        if pk in self._list_bools:
+            return len(self._list_bools[pk])
+        if pk in self._list_objs_len:
+            return self._list_objs_len[pk]
+        return -1
+
+    # True when `k` is present, non-null and not stored in any scalar/list container (i.e. a nested object).
+    def has_object(self: ValidatedData, k: str) -> bool:
+        if not self.has(k):
+            return False
+        if self.is_null(k):
+            return False
+        pk: str = self._prefix + k
+        if pk in self._strs or pk in self._ints or pk in self._floats or pk in self._bools:
+            return False
+        if pk in self._list_strs or pk in self._list_ints or pk in self._list_floats or pk in self._list_bools:
+            return False
+        if pk in self._list_objs_len:
+            return False
+        return True
+
+    # Human-readable category of what is actually stored under `k` (for type_mismatch diagnostics).
+    def kind_of(self: ValidatedData, k: str) -> str:
+        if not self.has(k):
+            return "missing"
+        if self.is_null(k):
+            return "null"
+        pk: str = self._prefix + k
+        if pk in self._list_strs or pk in self._list_ints or pk in self._list_floats or pk in self._list_bools or pk in self._list_objs_len:
+            return "array"
+        if pk in self._bools:
+            return "bool"
+        if pk in self._floats:
+            return "number"
+        if pk in self._ints:
+            return "number"
+        if pk in self._strs:
+            return "string"
+        return "object"
+
+    # Distinct first path segments of every key present under this view's prefix
+    # (e.g. {"name", "addr.city", "tags", "items[0].x"} -> ["name", "addr", "tags", "items"]).
+    # Used for POLICY_FORBID unknown-field detection. Declared extras (POLICY_ALLOW) are not included.
+    def top_level_keys(self: ValidatedData) -> list[str]:
+        res: list[str] = []
+        seen: dict[str, bool] = {}
+        plen: int = len(self._prefix)
+        i: int = 0
+        while i < len(self._present):
+            pk: str = self._present[i]
+            i = i + 1
+            if plen > 0:
+                if len(pk) <= plen:
+                    continue
+                if pk[0:plen] != self._prefix:
+                    continue
+            rem: str = pk[plen:len(pk)]
+            cut: int = len(rem)
+            ci: int = 0
+            while ci < len(rem):
+                ch: str = rem[ci:ci + 1]
+                if ch == "." or ch == "[":
+                    cut = ci
+                    ci = len(rem)
+                else:
+                    ci = ci + 1
+            seg: str = rem[0:cut]
+            if len(seg) > 0 and seg not in seen:
+                seen[seg] = True
+                res.append(seg)
+        return res
+
     def set_extra(self: ValidatedData, k: str, json_repr: str) -> None:
         pk: str = self._prefix + k
         self._extras[pk] = json_repr

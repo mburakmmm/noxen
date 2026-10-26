@@ -69,6 +69,10 @@ TARGETS = [
         "path": "examples/framework_adapter.nox",
         "expected_markers": 1,
     },
+    {
+        "path": "tests/unit/validate_data_parity_test.nox",
+        "expected_markers": 1,
+    },
 ]
 
 MARKER = "NOXEN_RESULT_JSON:"

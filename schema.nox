@@ -1204,6 +1204,25 @@ class Schema:
             )
             return ValidationResult(False, data, err_list)
 
+        # Policy check: unknown/extra fields in-memory (POLICY_FORBID)
+        if self.policy == POLICY_FORBID:
+            t_keys: list[str] = data.top_level_keys()
+            tki: int = 0
+            while tki < len(t_keys):
+                tk: str = t_keys[tki]
+                matched: Field | None = self.get_field(tk)
+                if matched is None:
+                    p_extra: str = tk
+                    if prefix != "":
+                        p_extra = prefix + "." + tk
+                    err_list.append(
+                        FieldError(p_extra, CODE_EXTRA_FIELD, "Unexpected unknown field: '" + p_extra + "'", "none", "present")
+                    )
+                    if len(err_list) >= self.max_errors:
+                        err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED, "Error limit reached", str(self.max_errors), str(len(err_list))))
+                        return ValidationResult(False, data, err_list)
+                tki = tki + 1
+
         fi: int = 0
         while fi < len(self.fields):
             field: Field = self.fields[fi]
@@ -1216,126 +1235,314 @@ class Schema:
 
             if not has_field and not is_null_val:
                 # Field missing
-                if field.mode == MODE_REQUIRED or field.mode == MODE_REQUIRED_NULLABLE:
-                    if not field.has_default:
-                        err_list.append(FieldError(full_path, CODE_MISSING_FIELD, "Missing required field: '" + full_path + "'", "value", "missing"))
+                if field.has_default:
+                    if field.kind == "string":
+                        data.set_str(field.name, field.default_str)
+                    elif field.kind == "int":
+                        data.set_int(field.name, field.default_int)
+                    elif field.kind == "float":
+                        data.set_float(field.name, field.default_float)
+                    elif field.kind == "bool":
+                        data.set_bool(field.name, field.default_bool)
+                elif field.mode == MODE_REQUIRED or field.mode == MODE_REQUIRED_NULLABLE:
+                    err_list.append(
+                        FieldError(full_path, CODE_MISSING_FIELD, "Missing required field: '" + full_path + "'", field.kind, "missing")
+                    )
             elif is_null_val:
                 # Field is explicitly null
-                if field.mode == MODE_REQUIRED or field.mode == MODE_OPTIONAL:
-                    err_list.append(FieldError(full_path, CODE_UNEXPECTED_NULL, "Field '" + full_path + "' cannot be null", "non-null", "null"))
+                if field.mode == MODE_REQUIRED_NULLABLE or field.mode == MODE_OPTIONAL_NULLABLE:
+                    data.set_null(field.name)
+                else:
+                    err_list.append(
+                        FieldError(full_path, CODE_UNEXPECTED_NULL, "Field '" + full_path + "' cannot be null", "non-null " + field.kind, "null")
+                    )
             else:
                 # Field is present and non-null
                 if field.kind == "string":
-                    sv: str = data.get_str(field.name)
-                    if field.has_min_len and len(sv) < field.min_len:
-                        err_list.append(FieldError(full_path, CODE_STRING_TOO_SHORT, "Field '" + full_path + "' must be at least " + str(field.min_len) + " characters", "len >= " + str(field.min_len), str(len(sv))))
-                    if field.has_max_len and len(sv) > field.max_len:
-                        err_list.append(FieldError(full_path, CODE_STRING_TOO_LONG, "Field '" + full_path + "' must be at most " + str(field.max_len) + " characters", "len <= " + str(field.max_len), str(len(sv))))
-                    if len(field.choices) > 0:
-                        matched_ch: bool = False
-                        chi: int = 0
-                        while chi < len(field.choices):
-                            if field.choices[chi] == sv:
-                                matched_ch = True
-                            chi = chi + 1
-                        if not matched_ch:
-                            err_list.append(FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed choices", "choice", sv))
-                    if len(field.pattern) > 0 and not nox.regex.is_match(field.pattern, sv):
-                        err_list.append(FieldError(full_path, CODE_PATTERN_MISMATCH, "Field '" + full_path + "' does not match pattern: " + field.pattern, field.pattern, sv))
-                    if field.fmt == "email" and not validators.is_valid_email(sv):
-                        err_list.append(FieldError(full_path, CODE_INVALID_EMAIL, "Field '" + full_path + "' is not a valid email address", "email", sv))
-                    if field.fmt == "url" and not validators.is_valid_url(sv):
-                        err_list.append(FieldError(full_path, CODE_INVALID_URL, "Field '" + full_path + "' is not a valid absolute URL", "url", sv))
-                    if field.fmt == "uuid" and not validators.is_valid_uuid(sv):
-                        err_list.append(FieldError(full_path, CODE_INVALID_UUID, "Field '" + full_path + "' is not a valid UUID", "uuid", sv))
-                    if field.fmt == "date" and not validators.is_valid_date(sv):
-                        err_list.append(FieldError(full_path, CODE_INVALID_DATE, "Field '" + full_path + "' is not a valid ISO 8601 date (YYYY-MM-DD)", "date", sv))
-                    if field.fmt == "time" and not validators.is_valid_time(sv):
-                        err_list.append(FieldError(full_path, CODE_INVALID_TIME, "Field '" + full_path + "' is not a valid ISO 8601 time (HH:MM:SS)", "time", sv))
-                    if field.fmt == "date-time" and not validators.is_valid_datetime(sv):
-                        err_list.append(FieldError(full_path, CODE_INVALID_DATETIME, "Field '" + full_path + "' is not a valid ISO 8601 datetime", "date-time", sv))
+                    if not data.has_str(field.name):
+                        err_list.append(
+                            FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected string", "string", data.kind_of(field.name))
+                        )
+                    else:
+                        sv: str = data.get_str(field.name)
+                        actual_repr: str = sv
+                        if field.is_secret:
+                            actual_repr = "[REDACTED]"
+
+                        if field.has_min_len and len(sv) < field.min_len:
+                            err_list.append(
+                                FieldError(full_path, CODE_STRING_TOO_SHORT, "Field '" + full_path + "' must have at least " + str(field.min_len) + " characters", "length >= " + str(field.min_len), str(len(sv)))
+                            )
+                        if field.has_max_len and len(sv) > field.max_len:
+                            err_list.append(
+                                FieldError(full_path, CODE_STRING_TOO_LONG, "Field '" + full_path + "' must have at most " + str(field.max_len) + " characters", "length <= " + str(field.max_len), str(len(sv)))
+                            )
+                        if len(field.choices) > 0:
+                            matched_ch: bool = False
+                            chi: int = 0
+                            while chi < len(field.choices):
+                                if field.choices[chi] == sv:
+                                    matched_ch = True
+                                chi = chi + 1
+                            if not matched_ch:
+                                err_list.append(
+                                    FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed choices", "choice", actual_repr)
+                                )
+                        if len(field.pattern) > 0 and not nox.regex.is_match(field.pattern, sv):
+                            err_list.append(
+                                FieldError(full_path, CODE_PATTERN_MISMATCH, "Field '" + full_path + "' does not match pattern: " + field.pattern, field.pattern, actual_repr)
+                            )
+                        if field.fmt == "email" and not validators.is_valid_email(sv):
+                            err_list.append(
+                                FieldError(full_path, CODE_INVALID_EMAIL, "Field '" + full_path + "' is not a valid email address", "email", actual_repr)
+                            )
+                        if field.fmt == "url" and not validators.is_valid_url(sv):
+                            err_list.append(
+                                FieldError(full_path, CODE_INVALID_URL, "Field '" + full_path + "' is not a valid absolute URL", "url", actual_repr)
+                            )
+                        if field.fmt == "uuid" and not validators.is_valid_uuid(sv):
+                            err_list.append(
+                                FieldError(full_path, CODE_INVALID_UUID, "Field '" + full_path + "' is not a valid UUID", "uuid", actual_repr)
+                            )
+                        if field.fmt == "date" and not validators.is_valid_date(sv):
+                            err_list.append(
+                                FieldError(full_path, CODE_INVALID_DATE, "Field '" + full_path + "' is not a valid ISO 8601 date (YYYY-MM-DD)", "date", actual_repr)
+                            )
+                        if field.fmt == "time" and not validators.is_valid_time(sv):
+                            err_list.append(
+                                FieldError(full_path, CODE_INVALID_TIME, "Field '" + full_path + "' is not a valid ISO 8601 time (HH:MM:SS)", "time", actual_repr)
+                            )
+                        if field.fmt == "date-time" and not validators.is_valid_datetime(sv):
+                            err_list.append(
+                                FieldError(full_path, CODE_INVALID_DATETIME, "Field '" + full_path + "' is not a valid ISO 8601 datetime", "date-time", actual_repr)
+                            )
 
                 elif field.kind == "int":
-                    iv: int = data.get_int(field.name)
-                    if field.has_min_int:
-                        if field.is_exclusive_min and iv <= field.min_val_int:
-                            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val_int), "> " + str(field.min_val_int), str(iv)))
-                        elif not field.is_exclusive_min and iv < field.min_val_int:
-                            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val_int), ">= " + str(field.min_val_int), str(iv)))
-                    if field.has_max_int:
-                        if field.is_exclusive_max and iv >= field.max_val_int:
-                            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val_int), "< " + str(field.max_val_int), str(iv)))
-                        elif not field.is_exclusive_max and iv > field.max_val_int:
-                            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val_int), "<= " + str(field.max_val_int), str(iv)))
-                    if len(field.choices_int) > 0:
-                        matched_chi: bool = False
-                        chii: int = 0
-                        while chii < len(field.choices_int):
-                            if field.choices_int[chii] == iv:
-                                matched_chi = True
-                            chii = chii + 1
-                        if not matched_chi:
-                            err_list.append(FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed integer choices", "int choice", str(iv)))
+                    if not data.has_int(field.name):
+                        err_list.append(
+                            FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected integer", "int", data.kind_of(field.name))
+                        )
+                    else:
+                        iv: int = data.get_int(field.name)
+                        if field.has_min_int:
+                            if field.is_exclusive_min:
+                                if iv <= field.min_val_int:
+                                    err_list.append(
+                                        FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val_int), "> " + str(field.min_val_int), str(iv))
+                                    )
+                            else:
+                                if iv < field.min_val_int:
+                                    err_list.append(
+                                        FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val_int), ">= " + str(field.min_val_int), str(iv))
+                                    )
+                        elif field.has_min:
+                            if field.is_exclusive_min:
+                                if float(iv) <= field.min_val:
+                                    err_list.append(
+                                        FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val), "> " + str(field.min_val), str(iv))
+                                    )
+                            else:
+                                if float(iv) < field.min_val:
+                                    err_list.append(
+                                        FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(iv))
+                                    )
+                        if field.has_max_int:
+                            if field.is_exclusive_max:
+                                if iv >= field.max_val_int:
+                                    err_list.append(
+                                        FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val_int), "< " + str(field.max_val_int), str(iv))
+                                    )
+                            else:
+                                if iv > field.max_val_int:
+                                    err_list.append(
+                                        FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val_int), "<= " + str(field.max_val_int), str(iv))
+                                    )
+                        elif field.has_max:
+                            if field.is_exclusive_max:
+                                if float(iv) >= field.max_val:
+                                    err_list.append(
+                                        FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val), "< " + str(field.max_val), str(iv))
+                                    )
+                            else:
+                                if float(iv) > field.max_val:
+                                    err_list.append(
+                                        FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(iv))
+                                    )
+                        if len(field.choices_int) > 0:
+                            matched_chi: bool = False
+                            chii: int = 0
+                            while chii < len(field.choices_int):
+                                if field.choices_int[chii] == iv:
+                                    matched_chi = True
+                                chii = chii + 1
+                            if not matched_chi:
+                                err_list.append(
+                                    FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed integer choices", "int choice", str(iv))
+                                )
 
                 elif field.kind == "float":
-                    fv: float = data.get_float(field.name)
-                    if not is_finite_float(fv):
-                        err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected finite float, got non-finite value", "finite float", str(fv)))
-                    if field.has_min:
-                        if field.is_exclusive_min and fv <= field.min_val:
-                            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val), "> " + str(field.min_val), str(fv)))
-                        elif not field.is_exclusive_min and fv < field.min_val:
-                            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(fv)))
-                    if field.has_max:
-                        if field.is_exclusive_max and fv >= field.max_val:
-                            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val), "< " + str(field.max_val), str(fv)))
-                        elif not field.is_exclusive_max and fv > field.max_val:
-                            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(fv)))
+                    if not data.has_float(field.name):
+                        err_list.append(
+                            FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected float", "float", data.kind_of(field.name))
+                        )
+                    else:
+                        fv: float = data.get_float(field.name)
+                        s_num: str = str(fv)
+                        if s_num == "nan" or s_num == "inf" or s_num == "-inf" or not is_finite_float(fv):
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected float", "float", s_num)
+                            )
+                        else:
+                            if field.has_min:
+                                if field.is_exclusive_min:
+                                    if fv <= field.min_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val), "> " + str(field.min_val), str(fv))
+                                        )
+                                else:
+                                    if fv < field.min_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(fv))
+                                        )
+                            if field.has_max:
+                                if field.is_exclusive_max:
+                                    if fv >= field.max_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val), "< " + str(field.max_val), str(fv))
+                                        )
+                                else:
+                                    if fv > field.max_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(fv))
+                                        )
+
+                elif field.kind == "bool":
+                    if not data.has_bool(field.name):
+                        err_list.append(
+                            FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected boolean", "bool", data.kind_of(field.name))
+                        )
 
                 elif field.kind == "object":
-                    sub_s: Schema | None = field.nested_schema
-                    if sub_s is not None:
-                        sub_data: ValidatedData = data.get_object(field.name)
-                        sub_res: ValidationResult = sub_s.validate_data_at(sub_data, full_path, depth + 1)
-                        if not sub_res.is_valid:
-                            si: int = 0
-                            while si < len(sub_res.errors):
-                                err_list.append(sub_res.errors[si])
-                                si = si + 1
+                    if not data.has_object(field.name):
+                        err_list.append(
+                            FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected object", "object", data.kind_of(field.name))
+                        )
+                    else:
+                        sub_s: Schema | None = field.nested_schema
+                        if sub_s is not None:
+                            if sub_s.max_depth > self.max_depth:
+                                sub_s.max_depth = self.max_depth
+                            sub_data: ValidatedData = data.get_object(field.name)
+                            sub_res: ValidationResult = sub_s.validate_data_at(sub_data, full_path, depth + 1)
+                            if not sub_res.is_valid:
+                                si: int = 0
+                                while si < len(sub_res.errors):
+                                    err_list.append(sub_res.errors[si])
+                                    si = si + 1
 
                 elif field.kind == "list":
-                    if field.item_kind == "object":
-                        is_sub: Schema | None = field.item_schema
-                        if is_sub is not None:
-                            sub_objs: list[ValidatedData] = data.get_list_object(field.name)
-                            j: int = 0
-                            while j < len(sub_objs):
-                                item_pfx: str = full_path + "[" + str(j) + "]"
-                                item_res: ValidationResult = is_sub.validate_data_at(sub_objs[j], item_pfx, depth + 1)
-                                if not item_res.is_valid:
-                                    k: int = 0
-                                    while k < len(item_res.errors):
-                                        err_list.append(item_res.errors[k])
-                                        k = k + 1
-                                j = j + 1
+                    alen: int = data.list_len(field.name)
+                    if alen < 0:
+                        err_list.append(
+                            FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected array", "list", data.kind_of(field.name))
+                        )
+                    else:
+                        if field.has_min_items and alen < field.min_items:
+                            err_list.append(
+                                FieldError(full_path, CODE_ARRAY_TOO_SHORT, "Array '" + full_path + "' must contain at least " + str(field.min_items) + " items", "length >= " + str(field.min_items), str(alen))
+                            )
+                        if field.has_max_items and alen > field.max_items:
+                            err_list.append(
+                                FieldError(full_path, CODE_ARRAY_TOO_LONG, "Array '" + full_path + "' must contain at most " + str(field.max_items) + " items", "length <= " + str(field.max_items), str(alen))
+                            )
+
+                        if field.item_kind == "string":
+                            if not data.has_list_str(field.name):
+                                err_list.append(
+                                    FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' elements expected string", "list[str]", data.kind_of(field.name))
+                                )
+                        elif field.item_kind == "int":
+                            if not data.has_list_int(field.name):
+                                err_list.append(
+                                    FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' elements expected integer", "list[int]", data.kind_of(field.name))
+                                )
+                        elif field.item_kind == "float":
+                            if not data.has_list_float(field.name):
+                                err_list.append(
+                                    FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' elements expected float", "list[float]", data.kind_of(field.name))
+                                )
+                            else:
+                                f_items: list[float] = data.get_list_float(field.name)
+                                ai: int = 0
+                                while ai < len(f_items):
+                                    f_el: float = f_items[ai]
+                                    s_num_el: str = str(f_el)
+                                    if s_num_el == "nan" or s_num_el == "inf" or s_num_el == "-inf" or not is_finite_float(f_el):
+                                        el_path: str = full_path + "[" + str(ai) + "]"
+                                        err_list.append(
+                                            FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected float", "float", s_num_el)
+                                        )
+                                    ai = ai + 1
+                        elif field.item_kind == "bool":
+                            if not data.has_list_bool(field.name):
+                                err_list.append(
+                                    FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' elements expected boolean", "list[bool]", data.kind_of(field.name))
+                                )
+                        elif field.item_kind == "object":
+                            if not data.has_list_object(field.name):
+                                err_list.append(
+                                    FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' elements expected object", "list[object]", data.kind_of(field.name))
+                                )
+                            else:
+                                is_sub: Schema | None = field.item_schema
+                                if is_sub is not None:
+                                    if is_sub.max_depth > self.max_depth:
+                                        is_sub.max_depth = self.max_depth
+                                    sub_objs: list[ValidatedData] = data.get_list_object(field.name)
+                                    j: int = 0
+                                    while j < len(sub_objs):
+                                        item_pfx: str = full_path + "[" + str(j) + "]"
+                                        item_res: ValidationResult = is_sub.validate_data_at(sub_objs[j], item_pfx, depth + 1)
+                                        if not item_res.is_valid:
+                                            k: int = 0
+                                            while k < len(item_res.errors):
+                                                err_list.append(item_res.errors[k])
+                                                k = k + 1
+                                        j = j + 1
+
+            if len(err_list) >= self.max_errors:
+                err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED, "Error limit reached", str(self.max_errors), str(len(err_list))))
+                return ValidationResult(False, data, err_list)
 
             fi = fi + 1
 
-        # Run custom validators
-        cvi: int = 0
-        while cvi < len(self.custom_validators):
-            cv: (ValidatedData) -> list[FieldError] = self.custom_validators[cvi]
-            extra_errs: list[FieldError] = cv(data)
-            eei: int = 0
-            while eei < len(extra_errs):
-                err_list.append(extra_errs[eei])
-                eei = eei + 1
-            cvi = cvi + 1
+        # Run custom validators only if field-level checks had no errors
+        if len(err_list) == 0:
+            cvi: int = 0
+            while cvi < len(self.custom_validators):
+                cv: (ValidatedData) -> list[FieldError] = self.custom_validators[cvi]
+                extra_errs: list[FieldError] = cv(data)
+                eei: int = 0
+                while eei < len(extra_errs):
+                    err_list.append(extra_errs[eei])
+                    eei = eei + 1
+                cvi = cvi + 1
 
         return ValidationResult(len(err_list) == 0, data, err_list)
 
     def validate_data(self: Schema, data: ValidatedData) -> ValidationResult:
         return self.validate_data_at(data, "", 0)
+
+    # Evaluated fast checked dump: validates existing ValidatedData in-memory (zero JSON overhead)
+    # and serializes immediately if valid; raises ValueError if validation fails.
+    def dump_checked(self: Schema, data: ValidatedData) -> str:
+        res: ValidationResult = self.validate_data(data)
+        if not res.is_valid:
+            err_msg: str = "Validation failed in dump_checked"
+            if len(res.errors) > 0:
+                err_msg = err_msg + ": " + res.errors[0].message
+            raise ValueError(err_msg)
+        return self.dump(res.data)
 
     def dump(self: Schema, data: ValidatedData) -> str:
         s: Serializer = Serializer()

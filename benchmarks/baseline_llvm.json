@@ -1,18 +1,18 @@
 {
   "Flat Model Parsing": {
     "name": "Flat Model Parsing",
-    "ms": 5,
-    "ops_sec": 1000000
+    "ms": 6,
+    "ops_sec": 833333
   },
   "Nested Model Parsing": {
     "name": "Nested Model Parsing",
-    "ms": 7,
-    "ops_sec": 714285
+    "ms": 8,
+    "ops_sec": 625000
   },
   "Invalid Payload Reject": {
     "name": "Invalid Payload Reject",
-    "ms": 4,
-    "ops_sec": 1250000
+    "ms": 5,
+    "ops_sec": 1000000
   },
   "Full JSON Round-Trip": {
     "name": "Full JSON Round-Trip",

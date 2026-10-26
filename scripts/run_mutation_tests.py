@@ -55,6 +55,13 @@ MUTATIONS = [
         "mutated": "if False and self._strict_keys and (k in self._written_map):",
         "test": "tests/unit/serializer_strict_test.nox",
     },
+    {
+        "name": "Mutant 6: Disable in-memory POLICY_FORBID check in validate_data_at",
+        "file": "schema.nox",
+        "original": "if self.policy == POLICY_FORBID:\n            t_keys: list[str] = data.top_level_keys()",
+        "mutated": "if False and self.policy == POLICY_FORBID:\n            t_keys: list[str] = data.top_level_keys()",
+        "test": "tests/unit/validate_data_parity_test.nox",
+    },
 ]
 
 def copy_repo_to_workspace(src_dir: str, dst_dir: str) -> None:
@@ -141,11 +148,11 @@ def main() -> int:
                 )
 
                 if res.returncode != 0:
-                    output_combined = (res.stdout or "") + (res.stderr or "")
-                    if "syntax error:" in output_combined.lower() or "type error:" in output_combined.lower():
+                    output_combined = ((res.stdout or "") + (res.stderr or "")).lower()
+                    if "syntax error:" in output_combined or "type error:" in output_combined or "codegen:" in output_combined:
                         compile_errors += 1
                         print(f"    [COMPILE_ERROR] Test '{rel_test}' failed with compiler error (exit code {res.returncode})")
-                    elif "assertionerror" in output_combined.lower() or "assert" in output_combined.lower() or res.returncode == 1:
+                    elif "assertionerror" in output_combined or "assert" in output_combined or "failed" in output_combined or res.returncode == 1:
                         killed_assertion += 1
                         print(f"    [KILLED_ASSERTION] Test '{rel_test}' caught mutant via assertion failure (exit code {res.returncode})!")
                     else:
@@ -176,8 +183,11 @@ def main() -> int:
     print(f"  Total Mutants:       {len(MUTATIONS)}")
     print(f"  Mutation Score:      {mutation_score:.1f}%")
 
-    if survived > 0:
-        print("\n[FAIL] Some mutants survived. Strengthen test assertions!")
+    if survived > 0 or compile_errors > 0:
+        if survived > 0:
+            print("\n[FAIL] Some mutants survived. Strengthen test assertions!")
+        if compile_errors > 0:
+            print("\n[FAIL] Some mutants produced compiler errors. Fix mutation constructs!")
         return 1
 
     print("\nALL MUTANTS SUCCESSFULLY KILLED! Test suite has high fault-detection coverage.")

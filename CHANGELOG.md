@@ -5,6 +5,35 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-10-26
+
+### Added
+- **Full In-Memory Validation Parity (`Schema.validate_data` & `Model.validate_data`) (P0)**:
+  - Achieved complete constraint parity between the JSON validation path (`validate_at`) and in-memory path (`validate_data_at`):
+    - Added `top_level_keys()` to `ValidatedData` and enforced `POLICY_FORBID` in memory to catch unexpected extra keys.
+    - Added typed presence predicates (`has_str`, `has_int`, `has_float`, `has_bool`, `has_list_str`, `has_list_int`, `has_list_float`, `has_list_bool`, `has_list_object`, `has_object`, `list_len`, `kind_of`) preventing crashes on mismatched data kinds and systematically reporting `type_mismatch`.
+    - Integrated array/list bounds (`min_items`, `max_items`) across primitive and object lists in memory.
+    - Added element-level validation for lists of primitives and recursive validation for lists of objects.
+    - Enforced `max_errors` accumulation limits in-memory.
+    - Synchronized custom validator execution so that custom validators only run if field-level validation passes with 0 errors.
+    - Added comprehensive unit test suite `tests/unit/validate_data_parity_test.nox` asserting differential parity between `validate_data` and `validate_json(dump(data))` across all types, boundary conditions, and nested hierarchies.
+- **Evaluated Fast Checked Dump (`dump_checked` & `to_json_checked`) (P2)**:
+  - Implemented `dump_checked` on `Schema`, `Model`, `ModelSchema`, and `BidirectionalModel`.
+  - Provides a high-speed checked serialization path: validates existing in-memory `ValidatedData` with zero JSON parsing overhead and immediately serializes if valid, raising `ValueError` on constraint violation.
+- **Platform-Isolated Benchmark Baselines (`scripts/check_performance_regression.py`) (P1)**:
+  - Eliminated cross-platform relative regression false positives in CI by isolating baselines per OS platform and backend:
+    - `baseline_darwin_llvm.json`, `baseline_darwin_qbe.json`
+    - `baseline_linux_llvm.json`, `baseline_linux_qbe.json`
+    - `baseline_windows_llvm.json`
+  - Relative comparisons now exclusively evaluate against the matching platform baseline, while calibrated absolute throughput floors continue to catch true hardware-agnostic algorithmic regressions.
+- **Mutation Testing CI Failure Policy & Expanded Mutants (P0 / P1)**:
+  - Upgraded `scripts/run_mutation_tests.py` to fail CI (`exit 1`) if any mutant produces a `COMPILE_ERROR` or if any mutant survives (`survived > 0 or compile_errors > 0`).
+  - Added new Mutant 6 targeting in-memory `POLICY_FORBID` validation in `validate_data_at`.
+  - Maintained 100.0% mutation score across all 6 mutants, all killed by test assertions (`KILLED_ASSERTION`).
+- **Dual-Backend Parity (LLVM & QBE)**:
+  - Expanded `scripts/verify_backend_parity.py` to 14 targets including `validate_data_parity_test.nox`.
+  - All 14 targets verified 100% identical in both semantic JSON verdict mode and strict byte-for-byte output mode.
+
 ## [0.8.1] - 2026-10-26
 
 ### Security

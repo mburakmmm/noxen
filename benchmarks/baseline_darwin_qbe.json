@@ -1,0 +1,37 @@
+{
+  "Flat Model Parsing": {
+    "name": "Flat Model Parsing",
+    "ms": 7,
+    "ops_sec": 714285
+  },
+  "Nested Model Parsing": {
+    "name": "Nested Model Parsing",
+    "ms": 9,
+    "ops_sec": 555555
+  },
+  "Invalid Payload Reject": {
+    "name": "Invalid Payload Reject",
+    "ms": 6,
+    "ops_sec": 833333
+  },
+  "Full JSON Round-Trip": {
+    "name": "Full JSON Round-Trip",
+    "ms": 9,
+    "ops_sec": 555555
+  },
+  "Deep Hierarchy Parsing": {
+    "name": "Deep Hierarchy Parsing (3L)",
+    "ms": 14,
+    "ops_sec": 357142
+  },
+  "Fast Model Dump": {
+    "name": "Fast Model Dump (bi)",
+    "ms": 5,
+    "ops_sec": 1000000
+  },
+  "Validated Model Dump": {
+    "name": "Validated Model Dump (chk)",
+    "ms": 9,
+    "ops_sec": 555555
+  }
+}

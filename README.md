@@ -90,7 +90,7 @@ Add Noxen to your project's `nox.json`:
     {
       "alias": "noxen",
       "repo": "github.com/mburakmmm/noxen",
-      "ref": "v0.8.1"
+      "ref": "v0.8.2"
     }
   ]
 }
@@ -105,7 +105,7 @@ noxc fetch
 Or install via `noxc`:
 
 ```sh
-noxc add noxen github.com/mburakmmm/noxen --ref v0.8.1
+noxc add noxen github.com/mburakmmm/noxen --ref v0.8.2
 ```
 
 ---
@@ -476,7 +476,9 @@ noxc run --backend qbe benchmarks/run_benchmarks.nox
 | Field Aliases | Supported | `.alias("json_key")` |
 | Nested Objects | Supported | `.field_object("address", addr_schema)` |
 | Multi-Level Nested Arrays | Supported | `.field_list_schema("employees", emp_schema)` with deep dot-and-index error paths |
-| Dual-Backend Parity | Supported | 100% structured semantic parity and byte-for-byte stdout verified across all 12 targets on LLVM and QBE |
+| Dual-Backend Parity | Supported | 100% structured semantic parity and byte-for-byte stdout verified across all 14 targets on LLVM and QBE |
+| Direct In-Memory Validation Parity | Supported | Full constraint parity between JSON and in-memory paths (`validate_data`, `top_level_keys`, `POLICY_FORBID`, type checks) |
+| Fast Checked Dump (`dump_checked`) | Supported | In-memory constraint-checked serialization (zero JSON parsing overhead, raises `ValueError` on violation) |
 | Automatic Models (`auto_model`) | Supported | Zero-boilerplate `auto_model("ClassName")` and fluent `Model` wrapper via reflection |
 | Mutation Testing | Supported | Automated mutation test suite (`scripts/run_mutation_tests.py`) with 100% mutation kill score |
 | Performance Regression Gate | Supported | Automated throughput floor enforcement (`scripts/check_performance_regression.py`) |
