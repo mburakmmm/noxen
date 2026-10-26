@@ -9,12 +9,14 @@ and runs differential testing across a matrix of payloads to prove 100% agreemen
 import subprocess
 import json
 import sys
+import shutil
 from jsonschema import Draft202012Validator
 
 def main():
     print("1. Running scripts/dump_schemas.nox via noxc...")
+    noxc_bin = shutil.which("noxc") or "noxc"
     res = subprocess.run(
-        ["noxc", "run", "scripts/dump_schemas.nox"],
+        [noxc_bin, "run", "scripts/dump_schemas.nox"],
         capture_output=True,
         text=True,
         check=True

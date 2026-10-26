@@ -75,7 +75,8 @@ class ModelSchema[T]:
         return self.schema.dump_validated(d)
 
     def to_json_validated(self, obj: T, unparser: (T) -> ValidatedData) -> str:
-        return self.dump_model_validated(obj, unparser)
+        d: ValidatedData = unparser(obj)
+        return self.schema.dump_validated(d)
 
 class BidirectionalModel[T]:
     model: ModelSchema[T]
