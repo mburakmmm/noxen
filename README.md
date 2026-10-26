@@ -1,14 +1,52 @@
 # Noxen
 
-> **Statically typed data modeling, parsing, validation, and serialization for the Nox programming language.**
->
-> Maturity status: **v0.5.2 — Database Primary Keys, SQL Injection Safety & Property Testing Release**. Verified against `noxc 2.0.27+`.
+<div align="center">
+
+[![CI](https://github.com/mburakmmm/noxen/actions/workflows/ci.yml/badge.svg)](https://github.com/mburakmmm/noxen/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/mburakmmm/noxen?color=007ec6&label=release)](https://github.com/mburakmmm/noxen/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Nox Toolchain](https://img.shields.io/badge/noxc-2.0.27+-00bcd4.svg)](https://noxlang.com)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-success.svg)](https://github.com/mburakmmm/noxen/actions)
+[![JSON Schema](https://img.shields.io/badge/JSON%20Schema-Draft%202020--12-792ee5.svg)](https://json-schema.org)
+
+**Statically typed data modeling, parsing, validation, and high-performance serialization for the [Nox programming language](https://noxlang.com).**
+
+*The idiomatic, reflection-free Pydantic counterpart for the Nox ecosystem with JSON Schema Draft 2020-12 compliance and Aether / Nyx adapters.*
+
+[Quick Start](#quick-start) • [Features](#highlights) • [Benchmarks](#benchmarks) • [Real-World Architecture](#real-world-service-architecture) • [Documentation](#documentation--license) • [Releases](https://github.com/mburakmmm/noxen/releases)
+
+</div>
 
 ---
 
 ## Overview
 
 **Noxen** brings the useful core of Pydantic to the Nox ecosystem — designed from the ground up as an idiomatic, ahead-of-time compiled, statically typed library with zero runtime reflection overhead or dynamic monkey patching.
+
+```text
+       JSON String / Database Row / HTTP Body
+                         │
+                         ▼
+        ┌───────────────────────────────────┐
+        │       Noxen Schema Validation     │
+        │  • Strict Type Enforcement        │
+        │  • Bounds, Regex, Enums & Formats │
+        │  • Extra Key & Nullability Policy │
+        └───────────────────────────────────┘
+                         │
+                         ▼
+               ValidatedData (Flat)
+                         │
+        ┌────────────────┴────────────────┐
+        ▼                                 ▼
+   Typed Domain Model                 JSON Output
+   (Pure Nox Classes)             (O(1) Strict Stream)
+        │                                 ▲
+        │                                 │
+        ▼                                 │
+   Nyx SQLite DB /               Aether HTTP Response
+   DbAdapter[T]                  (json_200 / json_201 / json_422)
+```
 
 ### Highlights
 
@@ -357,7 +395,7 @@ Run the full test suite with:
 noxc test
 ```
 
-All 25 unit, integration, and fuzz test suites pass cleanly across Linux, macOS, and Windows CI:
+All 26 unit, integration, and fuzz test suites pass cleanly across Linux, macOS, and Windows CI:
 
 ```text
 alias_test passed
@@ -379,6 +417,7 @@ json_schema_test passed
 limits_test passed
 nested_profile_test passed
 policy_allow_test passed
+property_test passed
 secret_redaction_test passed
 serialization_test passed
 serializer_strict_test passed
@@ -386,7 +425,7 @@ unknown_fields_test passed
 user_model_test passed
 validators_test passed
 
-25 passed, 0 failed (25 total)
+26 passed, 0 failed (26 total)
 ```
 
 ---
