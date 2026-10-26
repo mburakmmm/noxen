@@ -16,6 +16,7 @@ Security & Reliability Guarantees:
 import os
 import sys
 import shutil
+import signal
 import argparse
 import tempfile
 import subprocess
@@ -48,10 +49,10 @@ MUTATIONS = [
         "test": "tests/unit/unknown_fields_test.nox",
     },
     {
-        "name": "Mutant 4: Disable cycle detection in derive_from_class_internal",
+        "name": "Mutant 4: Disable unsupported type check in derive_from_class_internal",
         "file": "schema.nox",
-        "original": "if _is_in_derivation_stack(stack, class_name):",
-        "mutated": "if False and _is_in_derivation_stack(stack, class_name):",
+        "original": "            if not handled:\n                raise ValueError(\"Unsupported",
+        "mutated": "            if False and not handled:\n                raise ValueError(\"Unsupported",
         "test": "tests/unit/auto_schema_test.nox",
     },
     {
@@ -194,33 +195,45 @@ def main() -> int:
                 with open(target_file, "w", encoding="utf-8") as f:
                     f.write(mutated_content)
 
-                # Run target test with strict 35s timeout in temporary workspace
-                res = subprocess.run(
+                # Run target test with strict 35s timeout in isolated process group
+                proc = subprocess.Popen(
                     [noxc_cmd, "run", rel_test],
                     cwd=tmp_workspace,
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True,
-                    timeout=35,
+                    start_new_session=True if sys.platform != "win32" else False,
                 )
+                try:
+                    stdout, stderr = proc.communicate(timeout=35)
+                    ret = proc.returncode
+                except subprocess.TimeoutExpired:
+                    if sys.platform != "win32":
+                        try:
+                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                        except Exception:
+                            pass
+                    else:
+                        proc.kill()
+                    proc.communicate()
+                    killed_timeout += 1
+                    print(f"    [KILLED_TIMEOUT] Test '{rel_test}' timed out after 35s (infinite loop prevented)!", flush=True)
+                    continue
 
-                if res.returncode != 0:
-                    output_combined = ((res.stdout or "") + (res.stderr or "")).lower()
+                if ret != 0:
+                    output_combined = ((stdout or "") + (stderr or "")).lower()
                     if "syntax error:" in output_combined or "type error:" in output_combined or "codegen:" in output_combined:
                         compile_errors += 1
-                        print(f"    [COMPILE_ERROR] Test '{rel_test}' failed with compiler error (exit code {res.returncode})", flush=True)
+                        print(f"    [COMPILE_ERROR] Test '{rel_test}' failed with compiler error (exit code {ret})", flush=True)
                     elif "assertionerror" in output_combined or "assertion failed" in output_combined:
                         killed_assertion += 1
-                        print(f"    [KILLED_ASSERTION] Test '{rel_test}' caught mutant via assertion failure (exit code {res.returncode})!", flush=True)
+                        print(f"    [KILLED_ASSERTION] Test '{rel_test}' caught mutant via assertion failure (exit code {ret})!", flush=True)
                     else:
                         runtime_errors += 1
-                        print(f"    [RUNTIME_ERROR] Test '{rel_test}' caught mutant via runtime error (exit code {res.returncode})!", flush=True)
+                        print(f"    [RUNTIME_ERROR] Test '{rel_test}' caught mutant via runtime error (exit code {ret})!", flush=True)
                 else:
                     print(f"    [SURVIVED] WARNING: Test '{rel_test}' passed despite mutation!", flush=True)
                     survived += 1
-
-            except subprocess.TimeoutExpired:
-                killed_timeout += 1
-                print(f"    [KILLED_TIMEOUT] Test '{rel_test}' timed out after 35s (infinite loop prevented)!", flush=True)
 
             finally:
                 # Restore original file inside temp workspace for the next mutant

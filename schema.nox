@@ -457,7 +457,7 @@ class Schema:
         return self.derive_from_class_internal(class_name, init_stack)
 
     def derive_from_class_internal(self: Schema, class_name: str, stack: list[str]) -> Schema:
-        if _is_in_derivation_stack(stack, class_name):
+        if len(stack) >= 32 or _is_in_derivation_stack(stack, class_name):
             raise ValueError("Recursive model cycle detected for class '" + class_name + "'. Self-referential models must be defined with explicit recursion bounds.")
         idx: int = nox.reflect.class_index(class_name)
         if idx < 0:
