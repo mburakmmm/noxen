@@ -154,12 +154,24 @@ class Model:
     def validate_row(self: Model, row: Row) -> ValidationResult:
         return self.schema.validate_row(row)
 
+    # Validates current in-memory model data against schema
+    def validate_current(self: Model) -> ValidationResult:
+        raw_json: str = self.schema.dump(self.data)
+        return self.schema.validate_json(raw_json)
+
+    # Returns true if current in-memory model data satisfies all schema constraints
+    def is_valid(self: Model) -> bool:
+        res: ValidationResult = self.validate_current()
+        return res.is_valid
+
+    # Parses and validates JSON. On failure, preserves existing valid state (never leaves model in partially mutated state).
     def parse_json(self: Model, json_str: str) -> ValidationResult:
         res: ValidationResult = self.schema.validate_json(json_str)
         if res.is_valid:
             self.data = res.data
         return res
 
+    # Parses and validates tabular row. On failure, preserves existing valid state.
     def parse_row(self: Model, row: Row) -> ValidationResult:
         res: ValidationResult = self.schema.validate_row(row)
         if res.is_valid:

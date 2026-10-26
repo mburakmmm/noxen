@@ -73,6 +73,7 @@ jobs:
           noxc run examples/aether_server.nox
           noxc run examples/nyx_crud.nox
           noxc run examples/realworld_service.nox
+          noxc run examples/framework_adapter.nox
 
       - name: Run benchmarks (LLVM backend)
         run: |

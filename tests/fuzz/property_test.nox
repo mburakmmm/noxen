@@ -509,27 +509,45 @@ class LcgRng:
             return low
         return low + (self.next() % span)
 
-fuzz_rng: LcgRng = LcgRng(424242)
+# Deterministic seed constant for reproducible fuzzing (P2 requirement)
+FUZZ_LCG_SEED: int = 133742
+fuzz_rng: LcgRng = LcgRng(FUZZ_LCG_SEED)
 fuzz_idx: int = 0
 fuzz_valid_count: int = 0
 fuzz_invalid_count: int = 0
 
-sample_tags: list[str] = ["alpha", "beta", "gamma", "delta", "sensor-node", "", "special!@#", "long-tag-name-for-fuzzing"]
+sample_tags: list[str] = [
+    "alpha", "beta", "gamma", "delta", "sensor-node",
+    "", "a", "boundary\ttag", "special!@#", "long-tag-name-for-boundary-fuzzing"
+]
 
 while fuzz_idx < 1000:
-    fuzz_id: int = fuzz_rng.next_range(0 - 50, 500)
-    ratio_choice: int = fuzz_rng.next_range(0, 4)
+    # Boundary-biased integer generation
+    fuzz_id: int = 0
+    id_mode: int = fuzz_rng.next_range(0, 4)
+    if id_mode == 0:
+        fuzz_id = 0 # boundary zero
+    elif id_mode == 1:
+        fuzz_id = 1 # boundary minimum valid
+    elif id_mode == 2:
+        fuzz_id = 0 - fuzz_rng.next_range(1, 100) # negative boundary (invalid)
+    else:
+        fuzz_id = fuzz_rng.next_range(2, 500) # normal range
+
+    ratio_choice: int = fuzz_rng.next_range(0, 5)
     fuzz_ratio_str: str = "0.5"
     if ratio_choice == 0:
-        fuzz_ratio_str = "0.0"
+        fuzz_ratio_str = "0.0" # boundary min
     elif ratio_choice == 1:
-        fuzz_ratio_str = "1.0"
+        fuzz_ratio_str = "1.0" # boundary max
     elif ratio_choice == 2:
         fuzz_ratio_str = "0.75"
     elif ratio_choice == 3:
-        fuzz_ratio_str = "-0.5"
+        fuzz_ratio_str = "-0.5" # invalid negative
     elif ratio_choice == 4:
-        fuzz_ratio_str = "1.5"
+        fuzz_ratio_str = "1.5" # invalid overflow
+    elif ratio_choice == 5:
+        fuzz_ratio_str = "-0.0" # IEEE 754 signed zero
 
     tag_idx: int = fuzz_rng.next_range(0, len(sample_tags) - 1)
     fuzz_tag: str = sample_tags[tag_idx]
@@ -551,10 +569,10 @@ while fuzz_idx < 1000:
     res_fuzz: ValidationResult = sensor_schema.validate_json(fuzz_json)
     if res_fuzz.is_valid:
         fuzz_valid_count = fuzz_valid_count + 1
-        nox.test.assert_true(res_fuzz.data.get_int("id") == fuzz_id, "Fuzzed valid id matches")
+        nox.test.assert_true(res_fuzz.data.get_int("id") == fuzz_id, "Fuzzed valid id matches (seed 133742)")
     else:
         fuzz_invalid_count = fuzz_invalid_count + 1
-        nox.test.assert_true(len(res_fuzz.errors) > 0, "Invalid fuzzed payload has structured errors")
+        nox.test.assert_true(len(res_fuzz.errors) > 0, "Invalid fuzzed payload has structured errors (seed 133742)")
 
     fuzz_idx = fuzz_idx + 1
 
@@ -562,5 +580,5 @@ nox.test.assert_true(fuzz_valid_count > 0, "Fuzzer encountered valid cases")
 nox.test.assert_true(fuzz_invalid_count > 0, "Fuzzer encountered adversarial invalid cases")
 nox.test.assert_eq_int(fuzz_valid_count + fuzz_invalid_count, 1000, "Exactly 1,000 property fuzz tests executed")
 
-print("NOXEN_RESULT_JSON:{\"test\":\"property_test\",\"valid\":true,\"permutations\":239,\"random_fuzz_cases\":1000,\"fuzz_valid\":" + str(fuzz_valid_count) + ",\"fuzz_rejected\":" + str(fuzz_invalid_count) + "}")
+print("NOXEN_RESULT_JSON:{\"test\":\"property_test\",\"valid\":true,\"seed\":133742,\"permutations\":239,\"random_fuzz_cases\":1000,\"fuzz_valid\":" + str(fuzz_valid_count) + ",\"fuzz_rejected\":" + str(fuzz_invalid_count) + "}")
 print("property_test passed (192 valid Cartesian + 12 Unicode + 12 Float + 3 Nested Models + 2 Nested Array Hierarchies + 18 Adversarial + 1,000 Randomized property fuzz iterations)")

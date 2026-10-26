@@ -5,6 +5,30 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-10-26
+
+### Added
+- **Isolated Mutation Testing Workspace & Timeout Guards (P0)**:
+  - Refactored `scripts/run_mutation_tests.py` to execute entirely within a safe, isolated temporary workspace (`tempfile.TemporaryDirectory`).
+  - The working repository tree is never modified in-place, eliminating all risk of corrupted or dirtied source files during abrupt terminations (`kill -9`, CI cancellation, power interruption).
+  - Enforces a 20-second per-test execution timeout with automatic `TimeoutExpired` capture, guaranteeing that recursive cycle detection mutants and infinite loops are safely caught and categorized as `[KILLED (Timeout / Infinite Loop Prevented)]`.
+  - Added granular kill reason classification (Assertion Failure vs Error Triggered vs Timeout).
+- **Platform & Backend Aware Performance Regression Gate (P1)**:
+  - Upgraded `scripts/check_performance_regression.py` with automatic OS virtualization awareness (`get_platform_factor`).
+  - Calibrates baseline throughput floors on Windows CI runners (accounting for coarse timer granularity and VM context switching) while strictly enforcing bounds against real performance regressions.
+  - Added dedicated `--backend qbe` and `--backend llvm` evaluation profiles.
+- **Model In-Memory Validation Contracts & State Preservation Guarantees (P1)**:
+  - Added `model.validate_current() -> ValidationResult` and `model.is_valid() -> bool` to `Model` for explicit schema verification of in-memory mutations.
+  - Guaranteed and verified atomic state preservation: on `parse_json()` or `parse_row()` failure, existing valid model state is preserved intact (never left partially mutated or corrupted).
+  - Documented explicit timing, cost, and security contracts for `set_*()`, `validate_current()`, `to_json()`, `to_json_validated()`, and `parse_json()`.
+  - Clarified architectural distinction between Dynamic Validation Models (`Model` via `auto_model`) and Static Typed Mappings (`ModelSchema[T]`).
+- **Deterministic Fuzzing Seed & Boundary-Biased Generation (P2)**:
+  - Added explicit reproducible seed constant `FUZZ_LCG_SEED = 133742` in `tests/fuzz/property_test.nox`.
+  - Added boundary-biased property generators exercising zero, boundary minimum valid, negative out-of-range bounds, IEEE 754 signed zero (`-0.0`), and control characters.
+- **End-to-End Aether / Nyx Framework Adapter Example (P2)**:
+  - Added `examples/framework_adapter.nox` demonstrating real-world HTTP web service request validation, RFC 7807 (Problem Details) error formatting on HTTP 400 Bad Request, and validated response model serialization on HTTP 201 Created.
+  - Added to dual-backend parity test suite in `scripts/verify_backend_parity.py` as target #13 (verified 100% identical on LLVM and QBE).
+
 ## [0.7.3] - 2026-10-26
 
 ### Added

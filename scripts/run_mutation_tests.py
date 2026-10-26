@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
 """
 scripts/run_mutation_tests.py
-Automated mutation testing for Noxen.
+Automated mutation testing for Noxen with isolated temporary workspace and timeout guards.
 
 Introduces controlled faults into core validation & serialization logic and verifies
 that the test suite immediately catches and kills each mutant.
+
+Security & Reliability Guarantees:
+- Never modifies working tree files in-place: copies files to a temporary workspace
+  (tempfile.TemporaryDirectory) so repository code is NEVER corrupted or dirtied.
+- Enforces strict execution timeout (20s) to kill infinite loops and recursive cycle mutants.
+- Distinguishes kill reasons (assertion failure vs timeout vs compilation error).
 """
 
+import os
 import sys
 import shutil
+import tempfile
 import subprocess
 
 MUTATIONS = [
@@ -49,48 +57,85 @@ MUTATIONS = [
     },
 ]
 
+def copy_repo_to_workspace(src_dir: str, dst_dir: str) -> None:
+    """Copies required source and test files to an isolated workspace directory."""
+    ignore_patterns = shutil.ignore_patterns(
+        ".git", "build", "__pycache__", ".pytest_cache", ".gemini", ".system_generated"
+    )
+    for item in os.listdir(src_dir):
+        if item in [".git", "build", "__pycache__", ".pytest_cache", ".gemini", ".system_generated"]:
+            continue
+        s = os.path.join(src_dir, item)
+        d = os.path.join(dst_dir, item)
+        if os.path.isdir(s):
+            shutil.copytree(s, d, ignore=ignore_patterns, dirs_exist_ok=True)
+        else:
+            shutil.copy2(s, d)
+
 def main() -> int:
     noxc_cmd = shutil.which("noxc") or "noxc"
-    print("=== Noxen Automated Mutation Testing ===")
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    print("=== Noxen Automated Mutation Testing (Isolated Workspace) ===")
     print(f"Compiler binary: {noxc_cmd}")
+    print(f"Repository root: {repo_root}")
     print(f"Total Mutants: {len(MUTATIONS)}\n")
 
     killed = 0
     survived = 0
 
-    for i, m in enumerate(MUTATIONS, 1):
-        name = m["name"]
-        filepath = m["file"]
-        testpath = m["test"]
-        print(f"[{i}/{len(MUTATIONS)}] Applying {name}...")
+    with tempfile.TemporaryDirectory(prefix="noxen_mut_") as tmp_workspace:
+        print(f"Created isolated temporary mutation workspace: {tmp_workspace}")
+        copy_repo_to_workspace(repo_root, tmp_workspace)
 
-        with open(filepath, "r", encoding="utf-8") as f:
-            content = f.read()
+        for i, m in enumerate(MUTATIONS, 1):
+            name = m["name"]
+            rel_file = m["file"]
+            rel_test = m["test"]
+            print(f"[{i}/{len(MUTATIONS)}] Applying {name}...")
 
-        if m["original"] not in content:
-            print(f"[ERROR] Target mutation text not found in {filepath}: {m['original']}")
-            return 1
+            target_file = os.path.join(tmp_workspace, rel_file)
+            with open(target_file, "r", encoding="utf-8") as f:
+                content = f.read()
 
-        mutated_content = content.replace(m["original"], m["mutated"], 1)
+            if m["original"] not in content:
+                print(f"[ERROR] Target mutation text not found in {target_file}: {m['original']}")
+                return 1
 
-        try:
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(mutated_content)
+            mutated_content = content.replace(m["original"], m["mutated"], 1)
 
-            # Run target test to see if it catches the mutation
-            res = subprocess.run([noxc_cmd, "run", testpath], capture_output=True, text=True)
+            try:
+                # Apply mutation ONLY in temporary workspace
+                with open(target_file, "w", encoding="utf-8") as f:
+                    f.write(mutated_content)
 
-            if res.returncode != 0:
-                print(f"    [KILLED] Test '{testpath}' caught mutant (exit code {res.returncode})!")
+                # Run target test with strict 20s timeout in temporary workspace
+                res = subprocess.run(
+                    [noxc_cmd, "run", rel_test],
+                    cwd=tmp_workspace,
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+
+                if res.returncode != 0:
+                    output_combined = (res.stdout or "") + (res.stderr or "")
+                    if "AssertionError" in output_combined or "assertion failed" in output_combined.lower() or "assert" in output_combined:
+                        print(f"    [KILLED (Assertion Failure)] Test '{rel_test}' caught mutant (exit code {res.returncode})!")
+                    else:
+                        print(f"    [KILLED (Validation / Error Triggered)] Test '{rel_test}' caught mutant (exit code {res.returncode})!")
+                    killed += 1
+                else:
+                    print(f"    [SURVIVED] WARNING: Test '{rel_test}' passed despite mutation!")
+                    survived += 1
+
+            except subprocess.TimeoutExpired:
+                print(f"    [KILLED (Timeout / Infinite Loop Prevented)] Test '{rel_test}' timed out after 20s!")
                 killed += 1
-            else:
-                print(f"    [SURVIVED] WARNING: Test '{testpath}' passed despite mutation!")
-                survived += 1
 
-        finally:
-            # Always restore original file
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(content)
+            finally:
+                # Restore original file inside temp workspace for the next mutant
+                with open(target_file, "w", encoding="utf-8") as f:
+                    f.write(content)
 
     mutation_score = (killed / len(MUTATIONS)) * 100.0
     print(f"\nMutation Testing Results:")
@@ -103,6 +148,7 @@ def main() -> int:
         return 1
 
     print("\nALL MUTANTS SUCCESSFULLY KILLED! Test suite has high fault-detection coverage.")
+    print("Repository working tree remained 100% clean and untouched throughout execution.")
     return 0
 
 if __name__ == "__main__":

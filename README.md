@@ -90,7 +90,7 @@ Add Noxen to your project's `nox.json`:
     {
       "alias": "noxen",
       "repo": "github.com/mburakmmm/noxen",
-      "ref": "v0.7.0"
+      "ref": "v0.8.0"
     }
   ]
 }
@@ -105,7 +105,7 @@ noxc fetch
 Or install via `noxc`:
 
 ```sh
-noxc add noxen github.com/mburakmmm/noxen --ref v0.7.0
+noxc add noxen github.com/mburakmmm/noxen --ref v0.8.0
 ```
 
 ---
@@ -177,6 +177,58 @@ if res.is_ok:
 else:
     print("Validation failed:", res.errors[0].message)
 ```
+
+---
+
+### 2. Zero-Boilerplate Dynamic Model (`auto_model`)
+
+For rapid service development or generic handlers without writing manual factory closures:
+
+```nox
+import models
+from models import Model, auto_model
+from core import ValidationResult
+
+# Derives schema from reflection and wraps it in a fluent Model instance
+model: Model = auto_model("DeviceConfig")
+
+res: ValidationResult = model.parse_json("{\"device_id\": 42, \"hostname\": \"edge-gw\"}")
+if res.is_valid:
+    print("Device ID:", model.get_int("device_id"))
+    print("Hostname:", model.get_str("hostname"))
+
+    # Fluent mutation and verified output
+    model.set_str("hostname", "edge-gw-updated")
+    if model.is_valid():
+        print("Updated JSON:", model.to_json_validated())
+```
+
+---
+
+## Architecture: Dynamic Validation Model (`Model`) vs. Static Typed Mapping (`ModelSchema[T]`)
+
+Noxen provides two complementary, first-class modeling approaches tailored to different safety and ergonomics needs:
+
+| Capability | Dynamic Validation Model (`Model`) | Static Typed Mapping (`ModelSchema[T]`) |
+|---|---|---|
+| **Instantiation** | `auto_model("ClassName")` | `ModelSchema[T](schema, factory)` |
+| **Factory / Unparser** | **None (Zero Boilerplate)** | Explicit compiled closures |
+| **Return Value** | `Model` with fluent accessors | Real typed Nox class instance `T` |
+| **Field Access** | `model.get_str("name")` | Direct dot access `user.name` |
+| **Compile-Time Type Safety** | Validated at runtime | Checked at compile-time by `noxc` |
+| **JSON Round-Trip** | Built-in (`to_json`, `to_json_validated`) | `BidirectionalModel[T]` |
+| **Ideal For** | Dynamic endpoints, prototyping, web middleware | Core domain logic, strict compile-time types |
+
+### Model Operation Guarantees & Contracts
+
+| Method | Guarantee | Timing / Safety |
+|---|---|---|
+| `set_*()` | Updates field in memory without executing schema checks | O(1) / Instant |
+| `validate_current()` | Evaluates current in-memory data against schema constraints | Explicit verification check |
+| `is_valid()` | Returns `True` only if current data satisfies all schema rules | Boolean helper |
+| `to_json()` | High-speed direct serialization of current state | Maximum throughput |
+| `to_json_validated()` | Re-validates against schema before emitting JSON (raises `ValidationError` on mismatch) | Enforced correctness |
+| `parse_json()` | Validates incoming JSON; **on failure, existing valid model state is preserved intact** | Atomic state update |
 
 ---
 
@@ -457,7 +509,10 @@ All 31 unit, integration, and fuzz test suites pass cleanly across Linux, macOS,
 
 ```text
 alias_test passed
+api_compatibility_test passed
 auto_dump_test passed
+auto_model_test passed
+auto_schema_test passed
 bidirectional_model_test passed
 choices_test passed
 coercion_test passed
@@ -467,12 +522,14 @@ db_adapter_test passed
 dump_validated_test passed
 errors_test passed
 fields_test passed
+float_edge_cases_test passed
 fuzz_test passed
 http_adapter_test passed
 integer_precision_test passed
 json_schema_defs_test passed
 json_schema_test passed
 limits_test passed
+nested_array_test passed
 nested_profile_test passed
 policy_allow_test passed
 property_test passed
@@ -483,7 +540,7 @@ unknown_fields_test passed
 user_model_test passed
 validators_test passed
 
-26 passed, 0 failed (26 total)
+31 passed, 0 failed (31 total)
 ```
 
 ---

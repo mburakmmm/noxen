@@ -73,15 +73,41 @@ val_dump: str = m_device.to_json_validated()
 nox.test.assert_true(len(val_dump) > 0, "to_json_validated produces verified JSON")
 
 # -----------------------------------------------------------------------------
-# 3. Invalid Payload Rejection
+# 3. Invalid Payload Rejection & State Preservation Contract
 # -----------------------------------------------------------------------------
 invalid_payload: str = "{\"device_id\": \"not_an_int\", \"hostname\": \"edge\", \"voltage\": 3.3, \"is_active\": true}"
 res_inv: ValidationResult = m_device.parse_json(invalid_payload)
 nox.test.assert_true(not res_inv.is_valid, "Invalid string for int rejected automatically")
 nox.test.assert_eq_str(res_inv.errors[0].path, "device_id", "Error attributed to device_id")
 
+# Verify Invariant: Failed parse_json() MUST preserve existing valid state intact!
+nox.test.assert_eq_int(m_device.get_int("device_id"), 100, "device_id preserved after failed parse_json")
+nox.test.assert_eq_str(m_device.get_str("hostname"), "edge-router-100", "hostname preserved after failed parse_json")
+nox.test.assert_true(m_device.get_float("voltage") > 4.99 and m_device.get_float("voltage") < 5.01, "voltage preserved after failed parse")
+nox.test.assert_true(not m_device.get_bool("is_active"), "is_active preserved after failed parse")
+
 # -----------------------------------------------------------------------------
-# 4. Nested Model with AutoModel
+# 4. In-Memory Validation Contracts: validate_current() and is_valid()
+# -----------------------------------------------------------------------------
+nox.test.assert_true(m_device.is_valid(), "m_device with complete fields is valid")
+res_cur: ValidationResult = m_device.validate_current()
+nox.test.assert_true(res_cur.is_valid, "validate_current returns valid result")
+
+m_uninit: Model = auto_model("DeviceConfig")
+nox.test.assert_true(not m_uninit.is_valid(), "Unpopulated model is not valid (missing required fields)")
+res_uninit: ValidationResult = m_uninit.validate_current()
+nox.test.assert_true(not res_uninit.is_valid, "validate_current catches missing required fields")
+nox.test.assert_true(len(res_uninit.errors) >= 4, "Errors reported for unpopulated required fields")
+
+# Populate fields step-by-step
+m_uninit.set_int("device_id", 1)
+m_uninit.set_str("hostname", "gw-01")
+m_uninit.set_float("voltage", 3.3)
+m_uninit.set_bool("is_active", True)
+nox.test.assert_true(m_uninit.is_valid(), "Model becomes valid once all fields populated")
+
+# -----------------------------------------------------------------------------
+# 5. Nested Model with AutoModel
 # -----------------------------------------------------------------------------
 m_cluster: Model = auto_model("ServerCluster")
 nox.test.assert_eq_str(m_cluster.schema.name, "ServerCluster", "Nested schema name derived")

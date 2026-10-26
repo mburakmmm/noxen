@@ -1,0 +1,177 @@
+# examples/framework_adapter.nox
+# End-to-end framework adapter demonstration for Nox web services (Nyx / Aether).
+#
+# Illustrates idiomatic integration between an HTTP web framework and Noxen:
+# - Parsing and validating untrusted incoming HTTP JSON request bodies
+# - Emitting RFC 7807 Problem Details JSON responses on validation failures (HTTP 400)
+# - Constructing, validating, and serializing typed response models on success (HTTP 201)
+
+import nox.test
+import nox.json
+import noxen
+from noxen import Schema, Field, Model, auto_model, ValidationResult, FieldError
+from noxen import POLICY_FORBID, CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE
+
+# -----------------------------------------------------------------------------
+# 1. HTTP Protocol Transport Abstractions (Nyx / Aether style)
+# -----------------------------------------------------------------------------
+class AppRequest:
+    method: str
+    path: str
+    body: str
+
+    def __init__(self, method: str, path: str, body: str) -> None:
+        self.method = method
+        self.path = path
+        self.body = body
+
+class AppResponse:
+    status_code: int
+    content_type: str
+    body: str
+
+    def __init__(self, status_code: int, content_type: str, body: str) -> None:
+        self.status_code = status_code
+        self.content_type = content_type
+        self.body = body
+
+# -----------------------------------------------------------------------------
+# 2. Domain Models for API Payloads
+# -----------------------------------------------------------------------------
+class CreateUserPayload:
+    username: str
+    email: str
+    age: int
+    role: str
+
+    def __init__(self, username: str, email: str, age: int, role: str) -> None:
+        self.username = username
+        self.email = email
+        self.age = age
+        self.role = role
+
+class UserResponse:
+    user_id: int
+    username: str
+    email: str
+    status: str
+
+    def __init__(self, user_id: int, username: str, email: str, status: str) -> None:
+        self.user_id = user_id
+        self.username = username
+        self.email = email
+        self.status = status
+
+# -----------------------------------------------------------------------------
+# 3. HTTP Controller Endpoint with Noxen Validation
+# -----------------------------------------------------------------------------
+def format_rfc7807_error(errors: list[FieldError]) -> str:
+    # Formats machine-readable RFC 7807 Problem Details JSON
+    msg: str = "{\"type\":\"https://noxlang.com/errors/validation\",\"title\":\"Validation Failed\",\"status\":400,\"errors\":["
+    ei: int = 0
+    while ei < len(errors):
+        err: FieldError = errors[ei]
+        if ei > 0:
+            msg = msg + ","
+        msg = msg + "{\"field\":\"" + err.path + "\",\"code\":\"" + err.code + "\",\"message\":\"" + err.message + "\"}"
+        ei = ei + 1
+    msg = msg + "]}"
+    return msg
+
+def handle_create_user(req: AppRequest) -> AppResponse:
+    if req.method != "POST":
+        return AppResponse(405, "application/json", "{\"error\":\"Method Not Allowed\"}")
+
+    # Use auto_model to get a dynamic validation model derived from reflection
+    m_req: Model = auto_model("CreateUserPayload")
+    m_req.schema.set_policy(POLICY_FORBID)
+
+    # Add domain constraints
+    f_user: Field | None = m_req.schema.get_field("username")
+    if f_user is not None:
+        f_user.min_length(3).max_length(30)
+
+    f_age: Field | None = m_req.schema.get_field("age")
+    if f_age is not None:
+        f_age.min_i(18).max_i(120)
+
+    f_role: Field | None = m_req.schema.get_field("role")
+    if f_role is not None:
+        roles: list[str] = ["admin", "developer", "guest"]
+        f_role.in_choices(roles)
+
+    res: ValidationResult = m_req.parse_json(req.body)
+
+    if not res.is_valid:
+        problem_json: str = format_rfc7807_error(res.errors)
+        return AppResponse(400, "application/problem+json", problem_json)
+
+    # On success: construct UserResponse model
+    m_resp: Model = auto_model("UserResponse")
+    m_resp.set_int("user_id", 101)
+    m_resp.set_str("username", m_req.get_str("username"))
+    m_resp.set_str("email", m_req.get_str("email"))
+    m_resp.set_str("status", "active")
+
+    return AppResponse(201, "application/json", m_resp.to_json_validated())
+
+# -----------------------------------------------------------------------------
+# 4. Verification Scenarios
+# -----------------------------------------------------------------------------
+reqs_handled: int = 0
+c_201: int = 0
+c_400: int = 0
+
+# Scenario 1: Valid User Registration Request
+valid_req: AppRequest = AppRequest(
+    "POST",
+    "/api/v1/users",
+    "{\"username\":\"ada_lovelace\",\"email\":\"ada@computing.org\",\"age\":36,\"role\":\"developer\"}"
+)
+resp1: AppResponse = handle_create_user(valid_req)
+reqs_handled = reqs_handled + 1
+nox.test.assert_eq_int(resp1.status_code, 201, "Valid request yields HTTP 201 Created")
+nox.test.assert_eq_str(resp1.content_type, "application/json", "Response content type is JSON")
+nox.test.assert_true(nox.strings.contains(resp1.body, "\"user_id\":101"), "Response contains generated user_id")
+nox.test.assert_true(nox.strings.contains(resp1.body, "\"status\":\"active\""), "Response contains active status")
+c_201 = c_201 + 1
+
+# Scenario 2: Underage User (Constraint Violation: age < 18)
+underage_req: AppRequest = AppRequest(
+    "POST",
+    "/api/v1/users",
+    "{\"username\":\"young_coder\",\"email\":\"coder@nox.dev\",\"age\":15,\"role\":\"guest\"}"
+)
+resp2: AppResponse = handle_create_user(underage_req)
+reqs_handled = reqs_handled + 1
+nox.test.assert_eq_int(resp2.status_code, 400, "Underage user rejected with HTTP 400 Bad Request")
+nox.test.assert_eq_str(resp2.content_type, "application/problem+json", "Problem details MIME type")
+nox.test.assert_true(nox.strings.contains(resp2.body, "\"field\":\"age\""), "RFC 7807 attributes error to age field")
+c_400 = c_400 + 1
+
+# Scenario 3: Malicious Unknown Parameter (Policy Violation under POLICY_FORBID)
+extra_field_req: AppRequest = AppRequest(
+    "POST",
+    "/api/v1/users",
+    "{\"username\":\"hacker\",\"email\":\"hack@sec.net\",\"age\":25,\"role\":\"guest\",\"is_superadmin\":true}"
+)
+resp3: AppResponse = handle_create_user(extra_field_req)
+reqs_handled = reqs_handled + 1
+nox.test.assert_eq_int(resp3.status_code, 400, "Extra forbidden field rejected with HTTP 400")
+nox.test.assert_true(nox.strings.contains(resp3.body, "extra_field"), "RFC 7807 reports extra_field code")
+c_400 = c_400 + 1
+
+# Scenario 4: Malformed Syntax Error
+malformed_req: AppRequest = AppRequest(
+    "POST",
+    "/api/v1/users",
+    "{\"username\": incomplete json..."
+)
+resp4: AppResponse = handle_create_user(malformed_req)
+reqs_handled = reqs_handled + 1
+nox.test.assert_eq_int(resp4.status_code, 400, "Syntax error rejected with HTTP 400")
+nox.test.assert_true(nox.strings.contains(resp4.body, "invalid_json"), "RFC 7807 reports invalid_json")
+c_400 = c_400 + 1
+
+print("NOXEN_RESULT_JSON:{\"example\":\"framework_adapter\",\"valid\":true,\"requests_handled\":" + str(reqs_handled) + ",\"status_201\":" + str(c_201) + ",\"status_400\":" + str(c_400) + "}")
+print("Framework adapter integration example passed successfully")

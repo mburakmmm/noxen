@@ -65,6 +65,10 @@ TARGETS = [
         "path": "examples/json_roundtrip.nox",
         "expected_markers": 1,
     },
+    {
+        "path": "examples/framework_adapter.nox",
+        "expected_markers": 1,
+    },
 ]
 
 MARKER = "NOXEN_RESULT_JSON:"
