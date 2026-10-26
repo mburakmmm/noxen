@@ -489,5 +489,78 @@ res_bad_nested: ValidationResult = cluster_s.validate_json(bad_nested_arr_json)
 nox.test.assert_true(not res_bad_nested.is_valid, "Nested array constraint violation rejected")
 nox.test.assert_eq_str(res_bad_nested.errors[0].path, "nodes[0].locations[0].city", "Error accurately attributed to deep array path")
 
-print("NOXEN_RESULT_JSON:{\"test\":\"property_test\",\"valid\":true,\"permutations\":239}")
-print("property_test passed (192 valid Cartesian + 12 Unicode + 12 Float + 3 Nested Models + 2 Nested Array Hierarchies + 18 Adversarial permutations)")
+# -----------------------------------------------------------------------------
+# Invariant Property 8: Randomized Property-Based Fuzzing (1,000 Permutations)
+# -----------------------------------------------------------------------------
+class LcgRng:
+    state: int
+    def __init__(self, seed: int) -> None:
+        self.state = seed
+
+    def next(self) -> int:
+        self.state = (self.state * 1103515245 + 12345) % 2147483647
+        if self.state < 0:
+            self.state = 0 - self.state
+        return self.state
+
+    def next_range(self, low: int, high: int) -> int:
+        span: int = high - low + 1
+        if span <= 0:
+            return low
+        return low + (self.next() % span)
+
+fuzz_rng: LcgRng = LcgRng(424242)
+fuzz_idx: int = 0
+fuzz_valid_count: int = 0
+fuzz_invalid_count: int = 0
+
+sample_tags: list[str] = ["alpha", "beta", "gamma", "delta", "sensor-node", "", "special!@#", "long-tag-name-for-fuzzing"]
+
+while fuzz_idx < 1000:
+    fuzz_id: int = fuzz_rng.next_range(0 - 50, 500)
+    ratio_choice: int = fuzz_rng.next_range(0, 4)
+    fuzz_ratio_str: str = "0.5"
+    if ratio_choice == 0:
+        fuzz_ratio_str = "0.0"
+    elif ratio_choice == 1:
+        fuzz_ratio_str = "1.0"
+    elif ratio_choice == 2:
+        fuzz_ratio_str = "0.75"
+    elif ratio_choice == 3:
+        fuzz_ratio_str = "-0.5"
+    elif ratio_choice == 4:
+        fuzz_ratio_str = "1.5"
+
+    tag_idx: int = fuzz_rng.next_range(0, len(sample_tags) - 1)
+    fuzz_tag: str = sample_tags[tag_idx]
+
+    bool_choice: int = fuzz_rng.next_range(0, 1)
+    fuzz_bool_str: str = "true"
+    if bool_choice == 0:
+        fuzz_bool_str = "false"
+
+    corrupt_kind: int = fuzz_rng.next_range(0, 5)
+    fuzz_json: str = ""
+    if corrupt_kind == 0:
+        fuzz_json = "{\"ratio\": " + fuzz_ratio_str + ", \"tag\": \"" + fuzz_tag + "\", \"active\": " + fuzz_bool_str + "}"
+    elif corrupt_kind == 1:
+        fuzz_json = "{\"id\": " + str(fuzz_id) + ", \"ratio\": " + fuzz_ratio_str + ", \"tag\": \"" + fuzz_tag + "\", \"active\": " + fuzz_bool_str + ", \"fuzz_extra\": 123}"
+    else:
+        fuzz_json = "{\"id\": " + str(fuzz_id) + ", \"ratio\": " + fuzz_ratio_str + ", \"tag\": \"" + fuzz_tag + "\", \"active\": " + fuzz_bool_str + ", \"notes\": null}"
+
+    res_fuzz: ValidationResult = sensor_schema.validate_json(fuzz_json)
+    if res_fuzz.is_valid:
+        fuzz_valid_count = fuzz_valid_count + 1
+        nox.test.assert_true(res_fuzz.data.get_int("id") == fuzz_id, "Fuzzed valid id matches")
+    else:
+        fuzz_invalid_count = fuzz_invalid_count + 1
+        nox.test.assert_true(len(res_fuzz.errors) > 0, "Invalid fuzzed payload has structured errors")
+
+    fuzz_idx = fuzz_idx + 1
+
+nox.test.assert_true(fuzz_valid_count > 0, "Fuzzer encountered valid cases")
+nox.test.assert_true(fuzz_invalid_count > 0, "Fuzzer encountered adversarial invalid cases")
+nox.test.assert_eq_int(fuzz_valid_count + fuzz_invalid_count, 1000, "Exactly 1,000 property fuzz tests executed")
+
+print("NOXEN_RESULT_JSON:{\"test\":\"property_test\",\"valid\":true,\"permutations\":239,\"random_fuzz_cases\":1000,\"fuzz_valid\":" + str(fuzz_valid_count) + ",\"fuzz_rejected\":" + str(fuzz_invalid_count) + "}")
+print("property_test passed (192 valid Cartesian + 12 Unicode + 12 Float + 3 Nested Models + 2 Nested Array Hierarchies + 18 Adversarial + 1,000 Randomized property fuzz iterations)")

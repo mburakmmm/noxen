@@ -238,5 +238,5 @@ get4_resp: HttpResponse = handle_get_product(4)
 nox.test.assert_eq_int(200, get4_resp.status, "GET 4 returns HTTP 200")
 nox.test.assert_true(nox.strings.contains(get4_resp.body, "Pwned'); DROP TABLE products; --"), "Injected SQL string retrieved literally as product name without execution")
 
-print("NOXEN_RESULT_JSON:{\"service\":\"realworld_service\",\"status\":\"ok\",\"scenarios\":6}")
+print("NOXEN_RESULT_JSON:{\"service\":\"realworld_service\",\"status\":\"ok\",\"scenarios\":6,\"db_products\":" + str(rows_count[0].get_int(0)) + ",\"last_id\":4}")
 print("\nAll Real-World Service scenarios executed and verified successfully!")

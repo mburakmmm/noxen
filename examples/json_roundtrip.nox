@@ -51,4 +51,4 @@ if res.is_ok:
     if res_rt.is_ok:
         acct_rt: Account = res_rt.unwrap()
         print("Step 3: Round-trip successful! Verified balance:", acct_rt.balance)
-        print("NOXEN_RESULT_JSON:{\"example\":\"json_roundtrip\",\"roundtrip_ok\":true,\"balance\":" + str(acct_rt.balance) + "}")
+        print("NOXEN_RESULT_JSON:{\"example\":\"json_roundtrip\",\"roundtrip_ok\":true,\"balance\":" + str(acct_rt.balance) + ",\"email\":\"" + acct_rt.email + "\",\"verified\":" + str(acct_rt.is_verified).lower() + "}")

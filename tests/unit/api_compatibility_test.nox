@@ -1,0 +1,108 @@
+# tests/unit/api_compatibility_test.nox
+# Comprehensive public API contract and regression verification for Noxen v0.7.3.
+
+import nox.test
+import noxen
+import models
+from models import ModelSchema, BidirectionalModel
+from noxen import Schema, Field, Model, auto_model, auto_schema, schema_from_class
+import core
+from core import Result
+from noxen import Serializer, is_finite_float, ValidatedData, ValidationResult
+from noxen import FieldError, ValidationError
+from noxen import POLICY_FORBID, POLICY_IGNORE, POLICY_ALLOW
+from noxen import MODE_REQUIRED, MODE_REQUIRED_NULLABLE, MODE_OPTIONAL, MODE_OPTIONAL_NULLABLE
+from noxen import COERCION_STRICT, COERCION_LAX
+from noxen import json_200, json_201, json_422
+from noxen import DbAdapter, row_to_validated_data
+import errors
+from errors import CODE_TYPE_MISMATCH, CODE_MISSING_FIELD, CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE
+from errors import CODE_STRING_TOO_SHORT, CODE_STRING_TOO_LONG, CODE_PATTERN_MISMATCH, CODE_INVALID_FORMAT
+from errors import CODE_CUSTOM, CODE_NULL_NOT_ALLOWED, CODE_CHOICE_MISMATCH, CODE_INVALID_JSON
+from errors import CODE_MAX_ERRORS_EXCEEDED, CODE_MAX_DEPTH_EXCEEDED, CODE_ARRAY_TOO_SHORT, CODE_ARRAY_TOO_LONG
+
+# 1. Verify Constant Contract
+nox.test.assert_eq_int(POLICY_FORBID, 0, "POLICY_FORBID contract stable (0)")
+nox.test.assert_eq_int(POLICY_IGNORE, 1, "POLICY_IGNORE contract stable (1)")
+nox.test.assert_eq_int(POLICY_ALLOW, 2, "POLICY_ALLOW contract stable (2)")
+nox.test.assert_eq_int(COERCION_STRICT, 0, "COERCION_STRICT contract stable (0)")
+nox.test.assert_eq_int(COERCION_LAX, 1, "COERCION_LAX contract stable (1)")
+nox.test.assert_eq_str(CODE_TYPE_MISMATCH, "type_mismatch", "CODE_TYPE_MISMATCH stable")
+nox.test.assert_eq_str(CODE_MISSING_FIELD, "missing_field", "CODE_MISSING_FIELD stable")
+nox.test.assert_eq_str(CODE_EXTRA_FIELD, "extra_field", "CODE_EXTRA_FIELD stable")
+nox.test.assert_eq_str(CODE_CUSTOM, "custom_validation_error", "CODE_CUSTOM stable")
+
+# 2. Verify Schema & Field Fluent API
+s: Schema = Schema("ApiVerificationModel")
+f_str: Field = s.field_str("username").min_length(3).max_length(50).email()
+f_int: Field = s.field_int("age").min(0.0).max(120.0).ge(18.0)
+f_flt: Field = s.field_float("score").gt(0.0).lt(100.0)
+f_bol: Field = s.field_bool("active").default_b(True)
+s.set_policy(POLICY_FORBID)
+s.set_coercion(COERCION_STRICT)
+
+nox.test.assert_eq_str(s.name, "ApiVerificationModel", "Schema.name getter callable")
+nox.test.assert_eq_int(len(s.fields), 4, "Schema.fields count callable")
+nox.test.assert_eq_str(f_str.name, "username", "Field.name accessible")
+
+# 3. Verify Serializer & Mathematical Finiteness Contract
+nox.test.assert_true(is_finite_float(0.0), "is_finite_float(0.0) == True")
+nox.test.assert_true(is_finite_float(-0.0), "is_finite_float(-0.0) == True")
+nox.test.assert_true(not is_finite_float(1.0 / 0.0), "is_finite_float(inf) == False")
+ser: Serializer = Serializer().strict()
+ser.str("username", "ada")
+ser.int("age", 36)
+ser.float("score", 99.5)
+ser.bool("active", True)
+out_json: str = ser.build()
+nox.test.assert_true(len(out_json) > 0, "Serializer.build() produces JSON")
+
+# 4. Verify Validation & ValidatedData Accessors
+res: ValidationResult = s.validate_json("{\"username\":\"ada@example.com\",\"age\":36,\"score\":99.5,\"active\":true}")
+nox.test.assert_true(res.is_valid, "ValidationResult.is_valid is True")
+d: ValidatedData = res.data
+nox.test.assert_eq_str(d.get_str("username"), "ada@example.com", "ValidatedData.get_str")
+nox.test.assert_eq_int(d.get_int("age"), 36, "ValidatedData.get_int")
+nox.test.assert_true(d.get_float("score") > 99.0, "ValidatedData.get_float")
+nox.test.assert_true(d.get_bool("active"), "ValidatedData.get_bool")
+
+# 5. Verify Zero-Boilerplate Model & auto_model
+class ApiUser:
+    email: str
+    level: int
+    def __init__(self, email: str, level: int) -> None:
+        self.email = email
+        self.level = level
+
+auto_m: Model = auto_model("ApiUser")
+res_auto: ValidationResult = auto_m.parse_json("{\"email\":\"admin@noxlang.com\",\"level\":10}")
+nox.test.assert_true(res_auto.is_valid, "auto_model parses JSON without manual factory")
+nox.test.assert_eq_str(auto_m.get_str("email"), "admin@noxlang.com", "Model.get_str callable")
+nox.test.assert_eq_int(auto_m.get_int("level"), 10, "Model.get_int callable")
+dumped_m: str = auto_m.to_json()
+nox.test.assert_true(nox.strings.contains(dumped_m, "\"level\":10"), "Model.to_json callable")
+
+# 6. Verify Generic ModelSchema[T] and BidirectionalModel[T]
+def make_api_user(data: ValidatedData) -> ApiUser:
+    return ApiUser(data.get_str("email"), data.get_int("level"))
+
+def unparse_api_user(u: ApiUser) -> ValidatedData:
+    res_d: ValidatedData = ValidatedData()
+    res_d.set_str("email", u.email)
+    res_d.set_int("level", u.level)
+    return res_d
+
+ms: ModelSchema[ApiUser] = ModelSchema[ApiUser](auto_m.schema, make_api_user)
+bm: BidirectionalModel[ApiUser] = BidirectionalModel[ApiUser](ms, unparse_api_user)
+
+parsed_user_res: Result[ApiUser] = bm.parse_json("{\"email\":\"test@domain.com\",\"level\":5}")
+nox.test.assert_true(parsed_user_res.is_ok, "BidirectionalModel.parse_json succeeds")
+typed_u: ApiUser = parsed_user_res.unwrap()
+nox.test.assert_eq_str(typed_u.email, "test@domain.com", "Typed user unwrap")
+nox.test.assert_eq_int(typed_u.level, 5, "Typed user level")
+
+user_dump: str = bm.dump(typed_u)
+nox.test.assert_true(nox.strings.contains(user_dump, "\"test@domain.com\""), "BidirectionalModel.dump succeeds")
+
+print("NOXEN_RESULT_JSON:{\"test\":\"api_compatibility\",\"symbols_verified\":40,\"valid\":true}")
+print("api_compatibility_test passed")

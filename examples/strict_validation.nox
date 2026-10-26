@@ -19,4 +19,4 @@ if not res.is_valid:
     while i < len(res.errors):
         print("- [" + res.errors[i].code + "] at " + res.errors[i].path + ": " + res.errors[i].message)
         i = i + 1
-    print("NOXEN_RESULT_JSON:{\"example\":\"strict_validation\",\"valid\":false,\"error_count\":" + str(res.error_count()) + "}")
+    print("NOXEN_RESULT_JSON:{\"example\":\"strict_validation\",\"valid\":false,\"error_count\":" + str(res.error_count()) + ",\"first_error_code\":\"" + res.errors[0].code + "\",\"first_error_path\":\"" + res.errors[0].path + "\"}")

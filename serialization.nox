@@ -6,14 +6,10 @@ import core
 from core import ValidatedData
 
 def is_finite_float(v: float) -> bool:
-    # Pure mathematical IEEE 754 finite check without string formatting dependency:
-    # 1. NaN != NaN (v != v is True if and only if v is NaN)
-    # 2. Infinity != Infinity or (v - v) is NaN (v - v != 0.0 for +-inf)
-    if v != v:
-        return False
-    if v == (1.0 / 0.0) or v == (-1.0 / 0.0):
-        return False
-    return (v - v) == 0.0
+    # Pure mathematical IEEE 754 finite check without division-by-zero or string formatting:
+    # 1. NaN != NaN (v == v is False for NaN)
+    # 2. (+-inf - +-inf) is NaN != 0.0
+    return (v == v) and ((v - v) == 0.0)
 
 class Serializer:
     _w: JsonWriter

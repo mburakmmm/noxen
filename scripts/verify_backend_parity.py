@@ -26,6 +26,14 @@ TARGETS = [
         "expected_markers": 1,
     },
     {
+        "path": "tests/unit/auto_model_test.nox",
+        "expected_markers": 1,
+    },
+    {
+        "path": "tests/unit/api_compatibility_test.nox",
+        "expected_markers": 1,
+    },
+    {
         "path": "tests/fuzz/property_test.nox",
         "expected_markers": 1,
     },

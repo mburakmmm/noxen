@@ -35,4 +35,5 @@ res_good: ValidationResult = event_schema.validate_json(valid_event)
 
 if res_good.is_valid:
     print("Valid booking scheduled from", res_good.data.get_int("start_hour"), "to", res_good.data.get_int("end_hour"))
-    print("NOXEN_RESULT_JSON:{\"example\":\"custom_validator\",\"bad_valid\":false,\"good_valid\":true}")
+    dur: int = res_good.data.get_int("end_hour") - res_good.data.get_int("start_hour")
+    print("NOXEN_RESULT_JSON:{\"example\":\"custom_validator\",\"bad_valid\":false,\"good_valid\":true,\"start_hour\":" + str(res_good.data.get_int("start_hour")) + ",\"end_hour\":" + str(res_good.data.get_int("end_hour")) + ",\"duration\":" + str(dur) + "}")

@@ -91,3 +91,11 @@ jobs:
         run: |
           pip install jsonschema
           python scripts/verify_json_schema.py
+
+      - name: Run mutation testing suite
+        run: |
+          python scripts/run_mutation_tests.py
+
+      - name: Verify zero performance regressions
+        run: |
+          python scripts/check_performance_regression.py

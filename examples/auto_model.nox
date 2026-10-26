@@ -83,7 +83,7 @@ if res.is_ok:
     # 5. Round-trip serialization
     dumped: str = profile_bi.dump_validated(u)
     print("Dumped JSON:", dumped)
-    print("NOXEN_RESULT_JSON:{\"test\":\"auto_model\",\"valid\":true,\"username\":\"" + u.username + "\",\"age\":" + str(u.age) + "}")
+    print("NOXEN_RESULT_JSON:{\"test\":\"auto_model\",\"valid\":true,\"username\":\"" + u.username + "\",\"age\":" + str(u.age) + ",\"city\":\"" + u.addr.city + "\",\"skills_count\":" + str(len(u.skills)) + "}")
 
 # 6. Automatic JSON Schema Draft 2020-12 generation with nested $defs
 print("JSON Schema Draft 2020-12:")

@@ -1,0 +1,98 @@
+# tests/unit/auto_model_test.nox — Unit tests for zero-boilerplate Model and auto_model.
+
+import nox.test
+import models
+from models import Model, auto_model
+import core
+from core import ValidationResult, ValidatedData
+
+# -----------------------------------------------------------------------------
+# Test Classes for Automatic Modeling
+# -----------------------------------------------------------------------------
+class DeviceConfig:
+    device_id: int
+    hostname: str
+    voltage: float
+    is_active: bool
+
+    def __init__(self, device_id: int, hostname: str, voltage: float, is_active: bool) -> None:
+        self.device_id = device_id
+        self.hostname = hostname
+        self.voltage = voltage
+        self.is_active = is_active
+
+class NetworkInfo:
+    ip: str
+    port: int
+
+    def __init__(self, ip: str, port: int) -> None:
+        self.ip = ip
+        self.port = port
+
+class ServerCluster:
+    cluster_name: str
+    network: NetworkInfo
+
+    def __init__(self, cluster_name: str, network: NetworkInfo) -> None:
+        self.cluster_name = cluster_name
+        self.network = network
+
+# -----------------------------------------------------------------------------
+# 1. Zero-Boilerplate Flat Model Creation & Parsing
+# -----------------------------------------------------------------------------
+m_device: Model = auto_model("DeviceConfig")
+nox.test.assert_eq_str(m_device.schema.name, "DeviceConfig", "Schema name derived automatically")
+nox.test.assert_eq_int(len(m_device.schema.fields), 4, "Derived exactly 4 fields")
+
+valid_payload: str = "{\"device_id\": 42, \"hostname\": \"edge-router-01\", \"voltage\": 3.3, \"is_active\": true}"
+res_valid: ValidationResult = m_device.parse_json(valid_payload)
+nox.test.assert_true(res_valid.is_valid, "Valid JSON parsed directly into Model without factory closure")
+
+# Direct property accessors
+nox.test.assert_eq_int(m_device.get_int("device_id"), 42, "Direct get_int matches")
+nox.test.assert_eq_str(m_device.get_str("hostname"), "edge-router-01", "Direct get_str matches")
+nox.test.assert_true(m_device.get_float("voltage") > 3.29 and m_device.get_float("voltage") < 3.31, "Direct get_float matches")
+nox.test.assert_true(m_device.get_bool("is_active"), "Direct get_bool matches")
+
+# -----------------------------------------------------------------------------
+# 2. Model Mutation and Re-Serialization
+# -----------------------------------------------------------------------------
+m_device.set_int("device_id", 100)
+m_device.set_str("hostname", "edge-router-100")
+m_device.set_float("voltage", 5.0)
+m_device.set_bool("is_active", False)
+
+dumped: str = m_device.to_json()
+nox.test.assert_true(nox.strings.contains(dumped, "\"device_id\":100"), "Serialized JSON contains updated device_id")
+nox.test.assert_true(nox.strings.contains(dumped, "\"hostname\":\"edge-router-100\""), "Serialized JSON contains updated hostname")
+nox.test.assert_true(nox.strings.contains(dumped, "\"voltage\":5"), "Serialized JSON contains updated voltage")
+nox.test.assert_true(nox.strings.contains(dumped, "\"is_active\":false"), "Serialized JSON contains updated is_active")
+
+# Validated dump re-checks against schema
+val_dump: str = m_device.to_json_validated()
+nox.test.assert_true(len(val_dump) > 0, "to_json_validated produces verified JSON")
+
+# -----------------------------------------------------------------------------
+# 3. Invalid Payload Rejection
+# -----------------------------------------------------------------------------
+invalid_payload: str = "{\"device_id\": \"not_an_int\", \"hostname\": \"edge\", \"voltage\": 3.3, \"is_active\": true}"
+res_inv: ValidationResult = m_device.parse_json(invalid_payload)
+nox.test.assert_true(not res_inv.is_valid, "Invalid string for int rejected automatically")
+nox.test.assert_eq_str(res_inv.errors[0].path, "device_id", "Error attributed to device_id")
+
+# -----------------------------------------------------------------------------
+# 4. Nested Model with AutoModel
+# -----------------------------------------------------------------------------
+m_cluster: Model = auto_model("ServerCluster")
+nox.test.assert_eq_str(m_cluster.schema.name, "ServerCluster", "Nested schema name derived")
+cluster_json: str = "{\"cluster_name\": \"prod-west\", \"network\": {\"ip\": \"10.0.0.1\", \"port\": 8080}}"
+res_cluster: ValidationResult = m_cluster.parse_json(cluster_json)
+nox.test.assert_true(res_cluster.is_valid, "Nested cluster JSON validates cleanly")
+nox.test.assert_eq_str(m_cluster.get_str("cluster_name"), "prod-west", "Cluster name matches")
+
+sub_net: ValidatedData = m_cluster.get_object("network")
+nox.test.assert_eq_str(sub_net.get_str("ip"), "10.0.0.1", "Nested object ip matches")
+nox.test.assert_eq_int(sub_net.get_int("port"), 8080, "Nested object port matches")
+
+print("NOXEN_RESULT_JSON:{\"test\":\"auto_model\",\"valid\":true,\"fields\":4,\"nested_verified\":true}")
+print("auto_model_test passed")

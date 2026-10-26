@@ -215,5 +215,5 @@ res_re_empty: Result[Company] = company_model.parse_json(dumped_empty)
 nox.test.assert_true(res_re_empty.is_ok, "Empty employees round-trip re-parses cleanly")
 nox.test.assert_eq_int(len(res_re_empty.unwrap().employees), 0, "0 employees re-parsed")
 
-print("NOXEN_RESULT_JSON:{\"test\":\"nested_array\",\"valid\":true,\"company\":\"OmniCorp\",\"employees\":2}")
+print("NOXEN_RESULT_JSON:{\"test\":\"nested_array\",\"valid\":true,\"company\":\"" + c.name + "\",\"employees\":" + str(len(c.employees)) + ",\"e1_addrs\":" + str(len(e1.addresses)) + ",\"deep_verified\":true}")
 print("nested_array_test passed")

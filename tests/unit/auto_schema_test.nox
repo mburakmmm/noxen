@@ -169,5 +169,5 @@ except ValueError as e:
     unsupported_failed = True
 nox.test.assert_true(unsupported_failed, "auto_schema raises ValueError when encountering unsupported type (no silent loss)")
 
-print("NOXEN_RESULT_JSON:{\"test\":\"auto_schema\",\"valid\":true,\"fields_count\":7}")
+print("NOXEN_RESULT_JSON:{\"test\":\"auto_schema\",\"valid\":true,\"prof_fields\":" + str(len(s_prof.fields)) + ",\"addr_fields\":" + str(len(s_addr.fields)) + ",\"cycle_caught\":" + str(cycle_failed).lower() + ",\"unsupported_caught\":" + str(unsupported_failed).lower() + "}")
 print("auto_schema_test passed")

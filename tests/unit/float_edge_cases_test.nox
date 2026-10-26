@@ -204,5 +204,5 @@ except ValueError as e:
     ser_dump_nan_caught = True
 nox.test.assert_true(ser_dump_nan_caught, "Schema.dump rejects NaN with ValueError")
 
-print("NOXEN_RESULT_JSON:{\"test\":\"float_edge_cases\",\"valid\":true,\"nan_rejected\":true,\"neg_zero_preserved\":true,\"neg_zero_roundtrip_preserved\":true}")
+print("NOXEN_RESULT_JSON:{\"test\":\"float_edge_cases\",\"valid\":true,\"nan_rejected\":true,\"neg_zero_preserved\":true,\"neg_zero_roundtrip_preserved\":true,\"roundtrip_val\":" + str(val_rt_neg_zero) + ",\"sections_passed\":8}")
 print("float_edge_cases_test passed")

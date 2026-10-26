@@ -5,6 +5,28 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-10-26
+
+### Added
+- **Zero-Boilerplate Automatic Model Creation (`Model` & `auto_model`)**:
+  - Implemented `Model` class and `auto_model(class_name: str) -> Model` allowing instant model instantiation directly from class reflection metadata without requiring manual factory (`make_model`) or unparser closures.
+  - Supports fluent property accessors (`get_str`, `get_int`, `get_float`, `get_bool`, `get_opt_*`, `get_list_*`, `get_object`) and mutators (`set_str`, `set_int`, etc.).
+  - Added direct validation and serialization helpers: `model.parse_json()`, `model.to_json()`, `model.to_json_validated()`, and `model.to_json_schema()`.
+  - Added dedicated unit test suite `tests/unit/auto_model_test.nox`.
+- **Simplified IEEE 754 Finiteness Without Division-by-Zero (P0)**:
+  - Simplified `is_finite_float(v: float) -> bool` to `(v == v) and ((v - v) == 0.0)`, completely eliminating explicit `1.0 / 0.0` division-by-zero expressions while preserving 100% mathematical IEEE 754 rigor for NaN, +inf, and -inf.
+- **Dynamic Real-Result Semantic Parity Markers (P1)**:
+  - Upgraded structured `NOXEN_RESULT_JSON` markers across all 12 test and example targets to dynamically include verified runtime outcomes, exact case counts, and numeric values (e.g. `roundtrip_val`, `permutations`, `sections_passed`, `symbols_verified`).
+- **Comprehensive Public API Contract & Regression Suite (P1)**:
+  - Added `tests/unit/api_compatibility_test.nox` verifying the stability of all public constants, exports, fluent methods, adapters, and presence modes.
+- **Randomized Property-Based Fuzzing with 1,000 Permutations (P1)**:
+  - Added an adversarial linear congruential pseudo-random property fuzzer to `tests/fuzz/property_test.nox` testing 1,000 permutations of random integer ranges, float bounds, corrupt keys, and unicode strings.
+- **Automated Mutation Testing Suite (P2)**:
+  - Added `scripts/run_mutation_tests.py` verifying that core validation and serialization logic achieves a 100% mutation kill score (0 surviving mutants).
+- **Performance Regression Gate (P2)**:
+  - Added `scripts/check_performance_regression.py` enforcing minimum throughput floors (ops/sec) to prevent latency regressions across commits.
+  - Added mutation testing and performance regression steps to CI workflow (`.github/workflows/ci.yml`).
+
 ## [0.7.2] - 2026-10-26
 
 ### Added

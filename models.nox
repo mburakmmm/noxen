@@ -4,10 +4,12 @@ import schema
 import core
 import errors
 import nox.db
-from schema import Schema
+import nox.json
+from schema import Schema, auto_schema
 from core import ValidatedData, ValidationResult, Result
 from errors import FieldError
 from nox.db import Row
+from nox.json import JsonValue
 
 class ModelSchema[T]:
     schema: Schema
@@ -131,3 +133,139 @@ class BidirectionalModel[T]:
 
     def to_json_schema(self) -> str:
         return self.model.schema.to_json_schema()
+
+class Model:
+    schema: Schema
+    data: ValidatedData
+
+    def __init__(self: Model, schema: Schema, data: ValidatedData | None = None) -> None:
+        self.schema = schema
+        if data is None:
+            self.data = ValidatedData()
+        else:
+            self.data = data
+
+    def validate(self: Model, v: JsonValue) -> ValidationResult:
+        return self.schema.validate(v)
+
+    def validate_json(self: Model, json_str: str) -> ValidationResult:
+        return self.schema.validate_json(json_str)
+
+    def validate_row(self: Model, row: Row) -> ValidationResult:
+        return self.schema.validate_row(row)
+
+    def parse_json(self: Model, json_str: str) -> ValidationResult:
+        res: ValidationResult = self.schema.validate_json(json_str)
+        if res.is_valid:
+            self.data = res.data
+        return res
+
+    def parse_row(self: Model, row: Row) -> ValidationResult:
+        res: ValidationResult = self.schema.validate_row(row)
+        if res.is_valid:
+            self.data = res.data
+        return res
+
+    def dump(self: Model) -> str:
+        return self.schema.dump(self.data)
+
+    def to_json(self: Model) -> str:
+        return self.schema.dump(self.data)
+
+    def dump_validated(self: Model) -> str:
+        return self.schema.dump_validated(self.data)
+
+    def to_json_validated(self: Model) -> str:
+        return self.schema.dump_validated(self.data)
+
+    def to_json_schema(self: Model) -> str:
+        return self.schema.to_json_schema()
+
+    # Fluent data getters
+    def get_str(self: Model, key: str) -> str:
+        return self.data.get_str(key)
+
+    def get_int(self: Model, key: str) -> int:
+        return self.data.get_int(key)
+
+    def get_float(self: Model, key: str) -> float:
+        return self.data.get_float(key)
+
+    def get_bool(self: Model, key: str) -> bool:
+        return self.data.get_bool(key)
+
+    def get_opt_str(self: Model, key: str) -> str | None:
+        return self.data.get_opt_str(key)
+
+    def get_opt_int(self: Model, key: str) -> int | None:
+        return self.data.get_opt_int(key)
+
+    def get_opt_float(self: Model, key: str) -> float | None:
+        return self.data.get_opt_float(key)
+
+    def get_opt_bool(self: Model, key: str) -> bool | None:
+        return self.data.get_opt_bool(key)
+
+    def get_list_str(self: Model, key: str) -> list[str]:
+        return self.data.get_list_str(key)
+
+    def get_list_int(self: Model, key: str) -> list[int]:
+        return self.data.get_list_int(key)
+
+    def get_list_float(self: Model, key: str) -> list[float]:
+        return self.data.get_list_float(key)
+
+    def get_list_bool(self: Model, key: str) -> list[bool]:
+        return self.data.get_list_bool(key)
+
+    def get_object(self: Model, key: str) -> ValidatedData:
+        return self.data.get_object(key)
+
+    def get_opt_object(self: Model, key: str) -> ValidatedData | None:
+        return self.data.get_opt_object(key)
+
+    def get_list_object(self: Model, key: str) -> list[ValidatedData]:
+        return self.data.get_list_object(key)
+
+    # Fluent data setters
+    def set_str(self: Model, key: str, val: str) -> Model:
+        self.data.set_str(key, val)
+        return self
+
+    def set_int(self: Model, key: str, val: int) -> Model:
+        self.data.set_int(key, val)
+        return self
+
+    def set_float(self: Model, key: str, val: float) -> Model:
+        self.data.set_float(key, val)
+        return self
+
+    def set_bool(self: Model, key: str, val: bool) -> Model:
+        self.data.set_bool(key, val)
+        return self
+
+    def set_opt_str(self: Model, key: str, val: str | None) -> Model:
+        self.data.set_opt_str(key, val)
+        return self
+
+    def set_opt_int(self: Model, key: str, val: int | None) -> Model:
+        self.data.set_opt_int(key, val)
+        return self
+
+    def set_opt_float(self: Model, key: str, val: float | None) -> Model:
+        self.data.set_opt_float(key, val)
+        return self
+
+    def set_opt_bool(self: Model, key: str, val: bool | None) -> Model:
+        self.data.set_opt_bool(key, val)
+        return self
+
+    def has(self: Model, key: str) -> bool:
+        return self.data.has(key)
+
+    def is_null(self: Model, key: str) -> bool:
+        return self.data.is_null(key)
+
+def auto_model(class_name: str) -> Model:
+    s: Schema = auto_schema(class_name)
+    return Model(s)
