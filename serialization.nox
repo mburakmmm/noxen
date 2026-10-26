@@ -10,7 +10,7 @@ class Serializer:
     _written_keys: list[str]
     _strict_keys: bool
 
-    def __init__(self: Serializer, strict_keys: bool = False) -> None:
+    def __init__(self: Serializer, strict_keys: bool = True) -> None:
         self._w = JsonWriter()
         self._written_keys = []
         self._strict_keys = strict_keys
@@ -18,6 +18,10 @@ class Serializer:
 
     def strict(self: Serializer) -> Serializer:
         self._strict_keys = True
+        return self
+
+    def lax(self: Serializer) -> Serializer:
+        self._strict_keys = False
         return self
 
     def set_strict_keys(self: Serializer, strict: bool) -> None:

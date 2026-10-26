@@ -7,7 +7,8 @@ from serialization import Serializer
 from core import ValidatedData
 
 def test_strict_keys_rejects_duplicate_primitive() -> None:
-    s: Serializer = Serializer(True)
+    # Default Serializer() is strict by default in v0.4.1+
+    s: Serializer = Serializer()
     s.int("id", 10)
 
     caught: bool = False
@@ -16,7 +17,7 @@ def test_strict_keys_rejects_duplicate_primitive() -> None:
     except ValueError as e:
         caught = True
 
-    nox.test.assert_true(caught, "writing duplicate key 'id' in strict mode raises ValueError")
+    nox.test.assert_true(caught, "writing duplicate key 'id' in default strict mode raises ValueError")
 
 def test_strict_fluent_builder() -> None:
     s: Serializer = Serializer().strict()
@@ -50,8 +51,15 @@ def test_non_strict_mode_allows_manual_write() -> None:
     out: str = s.build()
     nox.test.assert_true(len(out) > 0, "non-strict serializer builds")
 
+def test_lax_fluent_builder_allows_manual_write() -> None:
+    s: Serializer = Serializer().lax()
+    s.str("key", "val1")
+    s.str("key", "val2")
+    out: str = s.build()
+    nox.test.assert_true(len(out) > 0, "lax() builder allows duplicate keys")
+
 def test_strict_mode_with_include_extras() -> None:
-    s: Serializer = Serializer(True)
+    s: Serializer = Serializer()
     s.str("name", "Alice")
     s.int("role_id", 1)
 
@@ -69,5 +77,6 @@ test_strict_keys_rejects_duplicate_primitive()
 test_strict_fluent_builder()
 test_strict_across_different_types()
 test_non_strict_mode_allows_manual_write()
+test_lax_fluent_builder_allows_manual_write()
 test_strict_mode_with_include_extras()
 print("serializer_strict_test passed")

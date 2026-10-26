@@ -2,7 +2,7 @@
 
 > **Statically typed data modeling, parsing, validation, and serialization for the Nox programming language.**
 >
-> Maturity status: **v0.4.0 — Bidirectional Serialization & Draft 2020-12 Compliance Release**. Verified against `noxc 2.0.27+`.
+> Maturity status: **v0.4.1 — Strict Serializer, Output Re-validation & Differential Testing Release**. Verified against `noxc 2.0.27+`.
 
 ---
 
@@ -47,7 +47,7 @@ Add Noxen to your project's `nox.json`:
     {
       "alias": "noxen",
       "repo": "github.com/mburakmmm/noxen",
-      "ref": "v0.4.0"
+      "ref": "v0.4.1"
     }
   ]
 }
@@ -352,7 +352,7 @@ Run the full test suite with:
 noxc test
 ```
 
-All 24 unit, integration, and fuzz test suites pass cleanly across Linux and macOS CI:
+All 25 unit, integration, and fuzz test suites pass cleanly across Linux, macOS, and Windows CI:
 
 ```text
 alias_test passed
@@ -363,6 +363,7 @@ coercion_test passed
 custom_validator_test passed
 datetime_test passed
 db_adapter_test passed
+dump_validated_test passed
 errors_test passed
 fields_test passed
 fuzz_test passed
@@ -380,7 +381,7 @@ unknown_fields_test passed
 user_model_test passed
 validators_test passed
 
-24 passed, 0 failed (24 total)
+25 passed, 0 failed (25 total)
 ```
 
 ---

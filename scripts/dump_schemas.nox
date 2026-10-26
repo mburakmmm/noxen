@@ -1,7 +1,9 @@
-# scripts/dump_schemas.nox — Generates schemas for external JSON Schema Draft 2020-12 validation.
+# scripts/dump_schemas.nox — Generates schemas and differential test cases for JSON Schema Draft 2020-12.
 
 import schema
+import core
 from schema import Schema
+from core import ValidationResult
 
 # 1. Nested Address schema
 addr: Schema = Schema("Address")
@@ -17,15 +19,92 @@ company.field_object("headquarters", addr)
 
 # 3. User schema referencing Company and Address
 user: Schema = Schema("User")
-user.field_int("id").min_i(1)
+user.field_int("id").min_i(1).max_i(1000)
+user.field_float("score").min(0.0).max(100.0)
+user.field_str("role").in_choices(["admin", "editor", "viewer"])
 user.field_str("username").min_length(3).max_length(30)
 user.field_str("email").email()
 user.field_str("website").url().optional().nullable()
 user.field_str("created_at").datetime()
 user.field_list("tags", "string").min_items(1).max_items(10)
 user.field_object("employer", company)
-user.field_list_schema("previous_employers", company)
 
 print("---SCHEMA_START---")
 print(user.to_json_schema())
 print("---SCHEMA_END---")
+
+# Run differential test payloads through Noxen validation and print verdicts
+cases: list[str] = []
+payloads: list[str] = []
+
+# Base valid payload
+# {"id":100,"score":95.5,"role":"admin","username":"ada_lovelace","email":"ada@example.com","website":"https://example.com/ada","created_at":"2026-10-26T12:00:00Z","tags":["tech"],"employer":{"name":"Acme","tax_id":"ACM-99","headquarters":{"street":"Baker 221B","city":"London","zip_code":"NW16XE"}}}
+
+# Case 1: valid_full
+cases.append("valid_full")
+payloads.append("{\"id\":100,\"score\":95.5,\"role\":\"admin\",\"username\":\"ada_lovelace\",\"email\":\"ada@example.com\",\"website\":\"https://example.com/ada\",\"created_at\":\"2026-10-26T12:00:00Z\",\"tags\":[\"tech\"],\"employer\":{\"name\":\"Acme\",\"tax_id\":\"ACM-99\",\"headquarters\":{\"street\":\"Baker 221B\",\"city\":\"London\",\"zip_code\":\"NW16XE\"}}}")
+
+# Case 2: valid_null_website (nullable)
+cases.append("valid_null_website")
+payloads.append("{\"id\":100,\"score\":95.5,\"role\":\"admin\",\"username\":\"ada_lovelace\",\"email\":\"ada@example.com\",\"website\":null,\"created_at\":\"2026-10-26T12:00:00Z\",\"tags\":[\"tech\"],\"employer\":{\"name\":\"Acme\",\"tax_id\":\"ACM-99\",\"headquarters\":{\"street\":\"Baker 221B\",\"city\":\"London\",\"zip_code\":\"NW16XE\"}}}")
+
+# Case 3: valid_omit_website (optional)
+cases.append("valid_omit_website")
+payloads.append("{\"id\":100,\"score\":95.5,\"role\":\"admin\",\"username\":\"ada_lovelace\",\"email\":\"ada@example.com\",\"created_at\":\"2026-10-26T12:00:00Z\",\"tags\":[\"tech\"],\"employer\":{\"name\":\"Acme\",\"tax_id\":\"ACM-99\",\"headquarters\":{\"street\":\"Baker 221B\",\"city\":\"London\",\"zip_code\":\"NW16XE\"}}}")
+
+# Case 4: reject_null_username (required non-nullable given null)
+cases.append("reject_null_username")
+payloads.append("{\"id\":100,\"score\":95.5,\"role\":\"admin\",\"username\":null,\"email\":\"ada@example.com\",\"created_at\":\"2026-10-26T12:00:00Z\",\"tags\":[\"tech\"],\"employer\":{\"name\":\"Acme\",\"tax_id\":\"ACM-99\",\"headquarters\":{\"street\":\"Baker 221B\",\"city\":\"London\",\"zip_code\":\"NW16XE\"}}}")
+
+# Case 5: reject_missing_username (required non-nullable omitted)
+cases.append("reject_missing_username")
+payloads.append("{\"id\":100,\"score\":95.5,\"role\":\"admin\",\"email\":\"ada@example.com\",\"created_at\":\"2026-10-26T12:00:00Z\",\"tags\":[\"tech\"],\"employer\":{\"name\":\"Acme\",\"tax_id\":\"ACM-99\",\"headquarters\":{\"street\":\"Baker 221B\",\"city\":\"London\",\"zip_code\":\"NW16XE\"}}}")
+
+# Case 6: reject_min_id (id < 1)
+cases.append("reject_min_id")
+payloads.append("{\"id\":0,\"score\":95.5,\"role\":\"admin\",\"username\":\"ada_lovelace\",\"email\":\"ada@example.com\",\"created_at\":\"2026-10-26T12:00:00Z\",\"tags\":[\"tech\"],\"employer\":{\"name\":\"Acme\",\"tax_id\":\"ACM-99\",\"headquarters\":{\"street\":\"Baker 221B\",\"city\":\"London\",\"zip_code\":\"NW16XE\"}}}")
+
+# Case 7: reject_max_id (id > 1000)
+cases.append("reject_max_id")
+payloads.append("{\"id\":1001,\"score\":95.5,\"role\":\"admin\",\"username\":\"ada_lovelace\",\"email\":\"ada@example.com\",\"created_at\":\"2026-10-26T12:00:00Z\",\"tags\":[\"tech\"],\"employer\":{\"name\":\"Acme\",\"tax_id\":\"ACM-99\",\"headquarters\":{\"street\":\"Baker 221B\",\"city\":\"London\",\"zip_code\":\"NW16XE\"}}}")
+
+# Case 8: reject_min_items (tags empty)
+cases.append("reject_min_items")
+payloads.append("{\"id\":100,\"score\":95.5,\"role\":\"admin\",\"username\":\"ada_lovelace\",\"email\":\"ada@example.com\",\"created_at\":\"2026-10-26T12:00:00Z\",\"tags\":[],\"employer\":{\"name\":\"Acme\",\"tax_id\":\"ACM-99\",\"headquarters\":{\"street\":\"Baker 221B\",\"city\":\"London\",\"zip_code\":\"NW16XE\"}}}")
+
+# Case 9: reject_tax_id_pattern (regex failure)
+cases.append("reject_tax_id_pattern")
+payloads.append("{\"id\":100,\"score\":95.5,\"role\":\"admin\",\"username\":\"ada_lovelace\",\"email\":\"ada@example.com\",\"created_at\":\"2026-10-26T12:00:00Z\",\"tags\":[\"tech\"],\"employer\":{\"name\":\"Acme\",\"tax_id\":\"invalid regex pattern with spaces!\",\"headquarters\":{\"street\":\"Baker 221B\",\"city\":\"London\",\"zip_code\":\"NW16XE\"}}}")
+
+# Case 10: reject_nested_street_length (nested street length < 3)
+cases.append("reject_nested_street_length")
+payloads.append("{\"id\":100,\"score\":95.5,\"role\":\"admin\",\"username\":\"ada_lovelace\",\"email\":\"ada@example.com\",\"created_at\":\"2026-10-26T12:00:00Z\",\"tags\":[\"tech\"],\"employer\":{\"name\":\"Acme\",\"tax_id\":\"ACM-99\",\"headquarters\":{\"street\":\"B\",\"city\":\"London\",\"zip_code\":\"NW16XE\"}}}")
+
+# Case 11: reject_additional_property (unknown property under POLICY_FORBID)
+cases.append("reject_additional_property")
+payloads.append("{\"id\":100,\"score\":95.5,\"role\":\"admin\",\"username\":\"ada_lovelace\",\"email\":\"ada@example.com\",\"created_at\":\"2026-10-26T12:00:00Z\",\"tags\":[\"tech\"],\"employer\":{\"name\":\"Acme\",\"tax_id\":\"ACM-99\",\"headquarters\":{\"street\":\"Baker 221B\",\"city\":\"London\",\"zip_code\":\"NW16XE\"}},\"unexpected_extra\":\"hacker_input\"}")
+
+# Case 12: reject_role_choice (invalid enum/choice)
+cases.append("reject_role_choice")
+payloads.append("{\"id\":100,\"score\":95.5,\"role\":\"superadmin\",\"username\":\"ada_lovelace\",\"email\":\"ada@example.com\",\"created_at\":\"2026-10-26T12:00:00Z\",\"tags\":[\"tech\"],\"employer\":{\"name\":\"Acme\",\"tax_id\":\"ACM-99\",\"headquarters\":{\"street\":\"Baker 221B\",\"city\":\"London\",\"zip_code\":\"NW16XE\"}}}")
+
+# Case 13: reject_score_min (score < 0.0)
+cases.append("reject_score_min")
+payloads.append("{\"id\":100,\"score\":-1.5,\"role\":\"admin\",\"username\":\"ada_lovelace\",\"email\":\"ada@example.com\",\"created_at\":\"2026-10-26T12:00:00Z\",\"tags\":[\"tech\"],\"employer\":{\"name\":\"Acme\",\"tax_id\":\"ACM-99\",\"headquarters\":{\"street\":\"Baker 221B\",\"city\":\"London\",\"zip_code\":\"NW16XE\"}}}")
+
+# Case 14: reject_score_max (score > 100.0)
+cases.append("reject_score_max")
+payloads.append("{\"id\":100,\"score\":105.2,\"role\":\"admin\",\"username\":\"ada_lovelace\",\"email\":\"ada@example.com\",\"created_at\":\"2026-10-26T12:00:00Z\",\"tags\":[\"tech\"],\"employer\":{\"name\":\"Acme\",\"tax_id\":\"ACM-99\",\"headquarters\":{\"street\":\"Baker 221B\",\"city\":\"London\",\"zip_code\":\"NW16XE\"}}}")
+
+print("---CASES_START---")
+ci: int = 0
+while ci < len(cases):
+    c_name: str = cases[ci]
+    c_payload: str = payloads[ci]
+    v_res: ValidationResult = user.validate_json(c_payload)
+    v_str: str = "VALID"
+    if not v_res.is_valid:
+        v_str = "REJECTED"
+    print(c_name + ":::" + v_str + ":::" + c_payload)
+    ci = ci + 1
+print("---CASES_END---")

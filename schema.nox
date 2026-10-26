@@ -1119,6 +1119,13 @@ class Schema:
 
         return s.build()
 
+    def dump_validated(self: Schema, data: ValidatedData) -> str:
+        raw_json: str = self.dump(data)
+        res: ValidationResult = self.validate_json(raw_json)
+        if not res.is_valid:
+            raise ValidationError(res.errors)
+        return raw_json
+
     def to_json_schema(self: Schema, include_defs: bool = True) -> str:
         w: JsonWriter = JsonWriter()
         w.begin_object()
@@ -1214,9 +1221,17 @@ class Schema:
             w.write_key(prop_key)
             w.begin_object()
 
+            is_nullable: bool = (f.mode == MODE_REQUIRED_NULLABLE or f.mode == MODE_OPTIONAL_NULLABLE)
+
             if f.kind == "string":
                 w.write_key("type")
-                w.write_string("string")
+                if is_nullable:
+                    w.begin_array()
+                    w.write_string("string")
+                    w.write_string("null")
+                    w.end_array()
+                else:
+                    w.write_string("string")
                 if f.has_min_len:
                     w.write_key("minLength")
                     w.write_int(f.min_len)
@@ -1243,7 +1258,13 @@ class Schema:
 
             elif f.kind == "int":
                 w.write_key("type")
-                w.write_string("integer")
+                if is_nullable:
+                    w.begin_array()
+                    w.write_string("integer")
+                    w.write_string("null")
+                    w.end_array()
+                else:
+                    w.write_string("integer")
                 if f.has_min_int:
                     if f.is_exclusive_min:
                         w.write_key("exclusiveMinimum")
@@ -1279,7 +1300,13 @@ class Schema:
 
             elif f.kind == "float":
                 w.write_key("type")
-                w.write_string("number")
+                if is_nullable:
+                    w.begin_array()
+                    w.write_string("number")
+                    w.write_string("null")
+                    w.end_array()
+                else:
+                    w.write_string("number")
                 if f.has_min:
                     if f.is_exclusive_min:
                         w.write_key("exclusiveMinimum")
@@ -1295,20 +1322,51 @@ class Schema:
 
             elif f.kind == "bool":
                 w.write_key("type")
-                w.write_string("boolean")
+                if is_nullable:
+                    w.begin_array()
+                    w.write_string("boolean")
+                    w.write_string("null")
+                    w.end_array()
+                else:
+                    w.write_string("boolean")
 
             elif f.kind == "object":
                 f_ns: Schema | None = f.nested_schema
                 if f_ns != None:
-                    w.write_key("$ref")
-                    w.write_string("#/$defs/" + f_ns.name)
+                    if is_nullable:
+                        w.write_key("anyOf")
+                        w.begin_array()
+                        w.begin_object()
+                        w.write_key("$ref")
+                        w.write_string("#/$defs/" + f_ns.name)
+                        w.end_object()
+                        w.begin_object()
+                        w.write_key("type")
+                        w.write_string("null")
+                        w.end_object()
+                        w.end_array()
+                    else:
+                        w.write_key("$ref")
+                        w.write_string("#/$defs/" + f_ns.name)
                 else:
                     w.write_key("type")
-                    w.write_string("object")
+                    if is_nullable:
+                        w.begin_array()
+                        w.write_string("object")
+                        w.write_string("null")
+                        w.end_array()
+                    else:
+                        w.write_string("object")
 
             elif f.kind == "list":
                 w.write_key("type")
-                w.write_string("array")
+                if is_nullable:
+                    w.begin_array()
+                    w.write_string("array")
+                    w.write_string("null")
+                    w.end_array()
+                else:
+                    w.write_string("array")
                 if f.has_min_items:
                     w.write_key("minItems")
                     w.write_int(f.min_items)

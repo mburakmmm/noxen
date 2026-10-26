@@ -67,6 +67,16 @@ class ModelSchema[T]:
         d: ValidatedData = unparser(obj)
         return self.schema.dump(d)
 
+    def dump_validated(self, data: ValidatedData) -> str:
+        return self.schema.dump_validated(data)
+
+    def dump_model_validated(self, obj: T, unparser: (T) -> ValidatedData) -> str:
+        d: ValidatedData = unparser(obj)
+        return self.schema.dump_validated(d)
+
+    def to_json_validated(self, obj: T, unparser: (T) -> ValidatedData) -> str:
+        return self.dump_model_validated(obj, unparser)
+
 class BidirectionalModel[T]:
     model: ModelSchema[T]
     unparser: (T) -> ValidatedData
@@ -83,6 +93,12 @@ class BidirectionalModel[T]:
 
     def validate_row(self, row: Row) -> ValidationResult:
         return self.model.validate_row(row)
+
+    def validate_model(self, obj: T) -> ValidationResult:
+        u: (T) -> ValidatedData = self.unparser
+        d: ValidatedData = u(obj)
+        raw_json: str = self.model.schema.dump(d)
+        return self.model.schema.validate_json(raw_json)
 
     def parse(self, v: JsonValue) -> Result[T]:
         return self.model.parse(v)
@@ -101,8 +117,16 @@ class BidirectionalModel[T]:
         d: ValidatedData = u(obj)
         return self.model.schema.dump(d)
 
+    def dump_validated(self, obj: T) -> str:
+        u: (T) -> ValidatedData = self.unparser
+        d: ValidatedData = u(obj)
+        return self.model.schema.dump_validated(d)
+
     def to_json(self, obj: T) -> str:
         return self.dump(obj)
+
+    def to_json_validated(self, obj: T) -> str:
+        return self.dump_validated(obj)
 
     def to_json_schema(self) -> str:
         return self.model.schema.to_json_schema()

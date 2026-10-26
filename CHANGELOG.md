@@ -5,6 +5,29 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-10-26
+
+### Added
+- **Serializer Strict-by-Default Architecture**:
+  - `Serializer()` now initializes with strict duplicate key collision protection enabled by default (`strict_keys: bool = True`).
+  - Added `.lax() -> Serializer` fluent builder method for explicit opt-out when writing unstructured or raw JSON.
+  - Mitigates duplicate JSON key parsing ambiguities and vulnerabilities at the serializer boundary.
+- **Output Re-validation Contracts (`dump_validated` & `validate_model`)**:
+  - Added `Schema.dump_validated(data: ValidatedData) -> str` and `ModelSchema[T].dump_validated(data: ValidatedData) -> str`.
+  - Added `dump_validated(self, obj: T) -> str` and `to_json_validated(self, obj: T) -> str` to `BidirectionalModel[T]` which re-runs full schema validation on the serialized output and raises `ValidationError` if any constraints are violated by mutated model state.
+  - Added `validate_model(self, obj: T) -> ValidationResult` to `BidirectionalModel[T]` providing non-throwing validation inspection for HTTP handlers and pipeline middleware.
+  - Preserves the ultra-fast 1,250,000 ops/sec `dump(obj)` path while providing strict output verification when required.
+- **JSON Schema Differential Testing Engine (Draft 2020-12)**:
+  - Upgraded `scripts/verify_json_schema.py` to a complete differential testing engine comparing Noxen's runtime validation verdicts against Python's official `Draft202012Validator`.
+  - Exercises a 14-scenario matrix covering nullable/optional presence, numeric bounds, array lengths, regex patterns, enum choices, nested structures, and unknown field rejection under `POLICY_FORBID`.
+  - Corrected JSON Schema Draft 2020-12 type emission for nullable fields (`type: ["string", "null"]` / `anyOf: [{ "$ref": ... }, { "type": "null" }]`), achieving 100% agreement across all scenarios.
+- **Cross-Platform Windows CI Pipeline**:
+  - Added `windows-latest` to the GitHub Actions test matrix in `.github/workflows/ci.yml`.
+  - Integrated PowerShell installation script `install.ps1` for automated Windows x86_64 runner validation.
+- **Extended Test Suite**:
+  - Added `tests/unit/dump_validated_test.nox` covering output re-validation and non-throwing model inspection.
+  - Expanded `tests/unit/serializer_strict_test.nox` to verify default strict initialization and `.lax()` opt-out.
+
 ## [0.4.0] - 2026-10-26
 
 ### Added

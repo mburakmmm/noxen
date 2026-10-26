@@ -1,0 +1,76 @@
+# dump_validated_test.nox — Output re-validation & fluent bidirectional builder test.
+
+import nox.test
+import schema
+import models
+import core
+import errors
+from schema import Schema
+from models import ModelSchema, BidirectionalModel
+from core import ValidatedData, ValidationResult
+from errors import ValidationError
+
+class User:
+    name: str
+    email: str
+    age: int
+
+    def __init__(self, name: str, email: str, age: int) -> None:
+        self.name = name
+        self.email = email
+        self.age = age
+
+def make_user(d: ValidatedData) -> User:
+    return User(d.get_str("name"), d.get_str("email"), d.get_int("age"))
+
+def unparse_user(u: User) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_str("name", u.name)
+    d.set_str("email", u.email)
+    d.set_int("age", u.age)
+    return d
+
+user_schema: Schema = Schema("User")
+user_schema.field_str("name").min_length(2)
+user_schema.field_str("email").email()
+user_schema.field_int("age").min_i(18).max_i(120)
+
+user_model: ModelSchema[User] = ModelSchema[User](user_schema, make_user)
+
+# Test 1: Bidirectional model construction
+user_bi: BidirectionalModel[User] = BidirectionalModel[User](user_model, unparse_user)
+
+valid_user: User = User("Ada Lovelace", "ada@example.com", 36)
+
+# Test 2: Valid object dump vs dump_validated
+fast_dump: str = user_bi.dump(valid_user)
+nox.test.assert_true(len(fast_dump) > 0, "fast dump produces JSON")
+
+validated_dump: str = user_bi.dump_validated(valid_user)
+nox.test.assert_eq_str(fast_dump, validated_dump, "validated dump matches fast dump on valid model")
+
+res_valid: ValidationResult = user_bi.validate_model(valid_user)
+nox.test.assert_true(res_valid.is_valid, "validate_model confirms valid user")
+
+# Test 3: Invalid mutated object (email invalid, age below 18)
+bad_user: User = User("Ada", "not-an-email", 16)
+
+# Fast path dumps without throwing (high-speed contract)
+bad_fast_dump: str = user_bi.dump(bad_user)
+nox.test.assert_true(len(bad_fast_dump) > 0, "fast dump permits outputting model state")
+
+# Non-throwing validation inspection
+res_bad: ValidationResult = user_bi.validate_model(bad_user)
+nox.test.assert_true(not res_bad.is_valid, "validate_model detects invalid model state")
+nox.test.assert_eq_int(2, len(res_bad.errors), "two errors detected: email and age")
+
+# Strict dump_validated throws ValidationError
+caught_validation_err: bool = False
+try:
+    user_bi.dump_validated(bad_user)
+except ValidationError as e:
+    caught_validation_err = True
+
+nox.test.assert_true(caught_validation_err, "dump_validated raises ValidationError on invalid model state")
+
+print("dump_validated_test passed")

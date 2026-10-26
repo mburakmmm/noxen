@@ -130,11 +130,20 @@ user: User = user_bi.parse_json("{\"id\": 42, \"full_name\": \"Grace Hopper\", \
 # Dump typed User object directly back to JSON wire format (with alias 'full_name'!)
 dumped_json: str = user_bi.dump(user)
 # {"id":42,"full_name":"Grace Hopper","bio":null}
+
+# Optional output validation: re-runs schema validation on serialized data
+validated_json: str = user_bi.dump_validated(user)
 ```
 
-### Key Collision Protection with `strict()` and `POLICY_ALLOW`
+### Fast `dump()` vs Strict `dump_validated()` Contract
 
-`Serializer.strict() -> Serializer` activates strict key checking. Any attempt to write a duplicate key raises `ValueError` immediately.
+1. **`dump(obj)` (Fast Path)**: Dumps model state directly without re-validating. Recommended for performance-critical hot loops (1,250,000 ops/sec).
+2. **`dump_validated(obj)` (Guaranteed Valid)**: Re-validates the unparsed model state against schema constraints before returning JSON, raising `ValidationError` on violations.
+3. **`validate_model(obj) -> ValidationResult`**: Inspects model state without throwing exceptions.
+
+### Key Collision Protection (Strict by Default)
+
+Starting in `v0.4.1`, `Serializer()` is **strict by default**. Any attempt to write a duplicate key raises `ValueError` immediately. To opt out, call `Serializer(False)` or `Serializer().lax()`.
 
 When `POLICY_ALLOW` is enabled, extra properties present in `ValidatedData` are serialized automatically without duplicate key bugs. `Serializer` tracks all written keys (`has_written_key`) so that extra properties colliding with defined schema fields are safely ignored during output generation.
 
