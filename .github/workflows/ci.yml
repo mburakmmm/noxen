@@ -23,17 +23,17 @@ jobs:
       - name: Install Nox (Linux / macOS)
         if: runner.os != 'Windows'
         env:
-          NOX_VERSION: v2.0.27
+          NOX_VERSION: v2.0.63
         run: |
-          curl -fsSL https://raw.githubusercontent.com/mburakmmm/nox-lang/v2.0.27/install.sh | bash
+          curl -fsSL https://raw.githubusercontent.com/mburakmmm/nox-lang/v2.0.63/install.sh | bash
           echo "$HOME/.nox-lang/bin" >> "$GITHUB_PATH"
 
       - name: Install Nox (Windows)
         if: runner.os == 'Windows'
         env:
-          NOX_VERSION: v2.0.27
+          NOX_VERSION: v2.0.63
         run: |
-          irm https://raw.githubusercontent.com/mburakmmm/nox-lang/v2.0.27/install.ps1 | iex
+          irm https://raw.githubusercontent.com/mburakmmm/nox-lang/v2.0.63/install.ps1 | iex
           echo "$env:USERPROFILE\.nox-lang\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Set up Python
@@ -75,6 +75,7 @@ jobs:
           noxc run examples/nyx_crud.nox
           noxc run examples/realworld_service.nox
           noxc run examples/framework_adapter.nox
+          noxc run examples/multi_format.nox
 
       - name: Run benchmarks (LLVM backend)
         run: |

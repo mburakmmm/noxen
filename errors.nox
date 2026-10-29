@@ -27,6 +27,8 @@ CODE_ARRAY_TOO_LONG: str = "array_too_long"
 CODE_RECURSION_LIMIT: str = "recursion_limit_exceeded"
 CODE_MAX_ERRORS_EXCEEDED: str = "max_errors_exceeded"
 CODE_CUSTOM: str = "custom_validation_error"
+CODE_INVALID_TOML: str = "invalid_toml"
+CODE_INVALID_YAML: str = "invalid_yaml"
 
 class FieldError:
     path: str

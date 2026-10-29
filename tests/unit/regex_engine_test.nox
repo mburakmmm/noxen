@@ -1,0 +1,48 @@
+# tests/unit/regex_engine_test.nox
+# Verifies native nox.regex integration, fail-fast syntax rejection, and full-match semantics.
+
+import nox.test
+import schema
+from schema import Schema, Field
+from core import ValidationResult
+from errors import CODE_PATTERN_MISMATCH
+
+# 1. Valid regex schema declaration
+s: Schema = Schema("RegexTestModel")
+s.field_str("code").regex("[A-Z]{3}-\\d{4}")
+s.field_str("tag").regex("^[a-z_]+$")
+
+# 2. Exact match valid payload
+res_valid: ValidationResult = s.validate_json("{\"code\":\"ABC-1234\",\"tag\":\"tech_lead\"}")
+nox.test.assert_true(res_valid.is_valid, "Valid regex pattern matches")
+
+# 3. Partial match must be REJECTED under is_full_match (e.g. prefix match or trailing extra chars)
+res_partial: ValidationResult = s.validate_json("{\"code\":\"ABC-1234extra\",\"tag\":\"tech_lead\"}")
+nox.test.assert_true(not res_partial.is_valid, "Partial regex match is rejected")
+nox.test.assert_eq_int(len(res_partial.errors), 1, "Exactly one error on partial match")
+nox.test.assert_eq_str(res_partial.errors[0].code, CODE_PATTERN_MISMATCH, "Error code is pattern_mismatch")
+
+# 4. In-memory data validation must also enforce is_full_match
+res_data_partial: ValidationResult = s.validate_data(res_partial.data)
+# (res_partial.data won't be filled if invalid, let's create a ValidatedData directly)
+import core
+from core import ValidatedData
+d_partial: ValidatedData = ValidatedData()
+d_partial.set_str("code", "ABC-1234_suffix")
+d_partial.set_str("tag", "ok")
+res_mem: ValidationResult = s.validate_data(d_partial)
+nox.test.assert_true(not res_mem.is_valid, "In-memory validation rejects partial regex match")
+nox.test.assert_eq_str(res_mem.errors[0].code, CODE_PATTERN_MISMATCH, "In-memory code is pattern_mismatch")
+
+# 5. Fail-fast syntax rejection: invalid regex pattern raises ValueError at definition time
+bad_syntax_caught: bool = False
+try:
+    bad_field: Field = Field("bad_field", "str")
+    bad_field.regex("[unclosed_set")
+except ValueError as e:
+    bad_syntax_caught = True
+
+nox.test.assert_true(bad_syntax_caught, "Invalid regex syntax immediately raises ValueError at schema definition")
+
+print("NOXEN_RESULT_JSON:{\"test\":\"regex_engine\",\"valid\":true,\"fail_fast_verified\":true,\"full_match_verified\":true}")
+print("regex_engine_test passed")

@@ -2,7 +2,7 @@
 
 import nox.reflect
 import errors
-from errors import FieldError, CODE_INVALID_JSON, CODE_EXPECTED_OBJECT, CODE_MISSING_FIELD, CODE_UNEXPECTED_NULL, CODE_TYPE_MISMATCH, CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE, CODE_STRING_TOO_SHORT, CODE_STRING_TOO_LONG, CODE_INVALID_EMAIL, CODE_INVALID_URL, CODE_INVALID_UUID, CODE_INVALID_DATE, CODE_INVALID_TIME, CODE_INVALID_DATETIME, CODE_PATTERN_MISMATCH, CODE_CHOICE_MISMATCH, CODE_ARRAY_TOO_SHORT, CODE_ARRAY_TOO_LONG, CODE_RECURSION_LIMIT, CODE_MAX_ERRORS_EXCEEDED
+from errors import FieldError, CODE_INVALID_JSON, CODE_EXPECTED_OBJECT, CODE_MISSING_FIELD, CODE_UNEXPECTED_NULL, CODE_TYPE_MISMATCH, CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE, CODE_STRING_TOO_SHORT, CODE_STRING_TOO_LONG, CODE_INVALID_EMAIL, CODE_INVALID_URL, CODE_INVALID_UUID, CODE_INVALID_DATE, CODE_INVALID_TIME, CODE_INVALID_DATETIME, CODE_PATTERN_MISMATCH, CODE_CHOICE_MISMATCH, CODE_ARRAY_TOO_SHORT, CODE_ARRAY_TOO_LONG, CODE_RECURSION_LIMIT, CODE_MAX_ERRORS_EXCEEDED, CODE_INVALID_TOML, CODE_INVALID_YAML
 import validators
 import core
 from core import ValidatedData, ValidationResult
@@ -10,8 +10,13 @@ import serialization
 from serialization import Serializer, is_finite_float
 import nox.json
 import nox.regex
+from nox.regex import RegexError
 import nox.strings
 import nox.db
+import nox.toml
+from nox.toml import TomlValue, TomlError
+import nox.yaml
+from nox.yaml import YamlValue, YamlError
 from nox.db import Row
 from nox.json import JsonError, JsonWriter
 
@@ -53,6 +58,70 @@ def _object_lookup(v: JsonValue, key: str) -> JsonValue | None:
             return nox.json.object_value(v, i)
         i = i + 1
     return None
+
+def _toml_to_json(v: TomlValue) -> str:
+    if nox.toml.is_string(v) or nox.toml.is_datetime(v):
+        return nox.json.dump_string(v.s)
+    if nox.toml.is_int(v):
+        return str(v.i)
+    if nox.toml.is_float(v):
+        return str(v.f)
+    if nox.toml.is_bool(v):
+        if v.b:
+            return "true"
+        return "false"
+    if nox.toml.is_array(v):
+        out: str = "["
+        idx: int = 0
+        while idx < len(v.arr):
+            if idx > 0:
+                out = out + ","
+            out = out + _toml_to_json(v.arr[idx])
+            idx = idx + 1
+        return out + "]"
+    if nox.toml.is_table(v):
+        out: str = "{"
+        first: bool = True
+        for k in v.tbl.keys():
+            if not first:
+                out = out + ","
+            first = False
+            out = out + nox.json.dump_string(k) + ":" + _toml_to_json(v.tbl[k])
+        return out + "}"
+    return "null"
+
+def _yaml_to_json(v: YamlValue) -> str:
+    if nox.yaml.is_null(v):
+        return "null"
+    if nox.yaml.is_string(v):
+        return nox.json.dump_string(v.s)
+    if nox.yaml.is_int(v):
+        return str(v.i)
+    if nox.yaml.is_float(v):
+        return str(v.f)
+    if nox.yaml.is_bool(v):
+        if v.b:
+            return "true"
+        return "false"
+    if nox.yaml.is_sequence(v):
+        out: str = "["
+        idx: int = 0
+        while idx < len(v.arr):
+            if idx > 0:
+                out = out + ","
+            out = out + _yaml_to_json(v.arr[idx])
+            idx = idx + 1
+        return out + "]"
+    if nox.yaml.is_mapping(v):
+        out: str = "{"
+        first: bool = True
+        for k in v.mapping.keys():
+            if not first:
+                out = out + ","
+            first = False
+            out = out + nox.json.dump_string(k) + ":" + _yaml_to_json(v.mapping[k])
+        return out + "}"
+    return "null"
 
 def _try_coerce_int(s: str) -> int | None:
     if len(s) == 0:
@@ -311,6 +380,10 @@ class Field:
         return self
 
     def regex(self: Field, pat: str) -> Field:
+        try:
+            nox.regex.is_full_match(pat, "")
+        except RegexError as e:
+            raise ValueError("Invalid regular expression '" + pat + "': " + e.message)
         self.pattern = pat
         return self
 
@@ -666,7 +739,7 @@ class Schema:
                                     err_list.append(
                                         FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed choices", "choice", actual_repr)
                                     )
-                            if len(field.pattern) > 0 and not nox.regex.is_match(field.pattern, sv):
+                            if len(field.pattern) > 0 and not nox.regex.is_full_match(field.pattern, sv):
                                 err_list.append(
                                     FieldError(full_path, CODE_PATTERN_MISMATCH, "Field '" + full_path + "' does not match pattern: " + field.pattern, field.pattern, actual_repr)
                                 )
@@ -1061,7 +1134,7 @@ class Schema:
                                 err_list.append(
                                     FieldError(field.name, CODE_CHOICE_MISMATCH, "Field '" + field.name + "' must be one of the allowed choices", "choice", actual_repr)
                                 )
-                        if len(field.pattern) > 0 and not nox.regex.is_match(field.pattern, raw_str):
+                        if len(field.pattern) > 0 and not nox.regex.is_full_match(field.pattern, raw_str):
                             err_list.append(
                                 FieldError(field.name, CODE_PATTERN_MISMATCH, "Field '" + field.name + "' does not match pattern: " + field.pattern, field.pattern, actual_repr)
                             )
@@ -1194,6 +1267,28 @@ class Schema:
             errs.append(FieldError("root", CODE_INVALID_JSON, "Malformed JSON syntax: " + e.message, "valid JSON", "syntax error"))
             return ValidationResult(False, data, errs)
 
+    def validate_toml(self: Schema, toml_str: str) -> ValidationResult:
+        try:
+            t: TomlValue = nox.toml.parse(toml_str)
+            j: str = _toml_to_json(t)
+            return self.validate_json(j)
+        except TomlError as e:
+            data: ValidatedData = ValidatedData()
+            errs: list[FieldError] = []
+            errs.append(FieldError("root", CODE_INVALID_TOML, "Malformed TOML syntax: " + e.message, "valid TOML", "syntax error"))
+            return ValidationResult(False, data, errs)
+
+    def validate_yaml(self: Schema, yaml_str: str) -> ValidationResult:
+        try:
+            y: YamlValue = nox.yaml.parse(yaml_str)
+            j: str = _yaml_to_json(y)
+            return self.validate_json(j)
+        except YamlError as e:
+            data: ValidatedData = ValidatedData()
+            errs: list[FieldError] = []
+            errs.append(FieldError("root", CODE_INVALID_YAML, "Malformed YAML syntax: " + e.message, "valid YAML", "syntax error"))
+            return ValidationResult(False, data, errs)
+
     # In-memory validation of an existing ValidatedData instance against schema constraints (zero JSON overhead)
     def validate_data_at(self: Schema, data: ValidatedData, prefix: str, depth: int) -> ValidationResult:
         err_list: list[FieldError] = []
@@ -1288,7 +1383,7 @@ class Schema:
                                 err_list.append(
                                     FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed choices", "choice", actual_repr)
                                 )
-                        if len(field.pattern) > 0 and not nox.regex.is_match(field.pattern, sv):
+                        if len(field.pattern) > 0 and not nox.regex.is_full_match(field.pattern, sv):
                             err_list.append(
                                 FieldError(full_path, CODE_PATTERN_MISMATCH, "Field '" + full_path + "' does not match pattern: " + field.pattern, field.pattern, actual_repr)
                             )
@@ -1606,6 +1701,118 @@ class Schema:
         if not res.is_valid:
             raise ValidationError(res.errors)
         return raw_json
+
+    def dump_toml(self: Schema, data: ValidatedData) -> str:
+        tbl: dict[str, TomlValue] = {}
+        fi: int = 0
+        while fi < len(self.fields):
+            f: Field = self.fields[fi]
+            out_key: str = f.name
+            if len(f.json_name) > 0:
+                out_key = f.json_name
+
+            if data.has(f.name) and not data.is_null(f.name):
+                if f.kind == "string":
+                    tbl[out_key] = TomlValue(0, False, 0, 0.0, data.get_str(f.name), [], {})
+                elif f.kind == "int":
+                    tbl[out_key] = TomlValue(1, False, data.get_int(f.name), 0.0, "", [], {})
+                elif f.kind == "float":
+                    tbl[out_key] = TomlValue(2, False, 0, data.get_float(f.name), "", [], {})
+                elif f.kind == "bool":
+                    tbl[out_key] = TomlValue(3, data.get_bool(f.name), 0, 0.0, "", [], {})
+                elif f.kind == "list":
+                    if f.item_kind == "string" or f.item_kind == "str":
+                        ls: list[str] = data.get_list_str(f.name)
+                        arr: list[TomlValue] = []
+                        lsi: int = 0
+                        while lsi < len(ls):
+                            arr.append(TomlValue(0, False, 0, 0.0, ls[lsi], [], {}))
+                            lsi = lsi + 1
+                        tbl[out_key] = TomlValue(4, False, 0, 0.0, "", arr, {})
+                    elif f.item_kind == "int":
+                        li: list[int] = data.get_list_int(f.name)
+                        arr_i: list[TomlValue] = []
+                        lii: int = 0
+                        while lii < len(li):
+                            arr_i.append(TomlValue(1, False, li[lii], 0.0, "", [], {}))
+                            lii = lii + 1
+                        tbl[out_key] = TomlValue(4, False, 0, 0.0, "", arr_i, {})
+                    elif f.item_kind == "float":
+                        lf: list[float] = data.get_list_float(f.name)
+                        arr_f: list[TomlValue] = []
+                        lfi: int = 0
+                        while lfi < len(lf):
+                            arr_f.append(TomlValue(2, False, 0, lf[lfi], "", [], {}))
+                            lfi = lfi + 1
+                        tbl[out_key] = TomlValue(4, False, 0, 0.0, "", arr_f, {})
+                    elif f.item_kind == "bool":
+                        lb: list[bool] = data.get_list_bool(f.name)
+                        arr_b: list[TomlValue] = []
+                        lbi: int = 0
+                        while lbi < len(lb):
+                            arr_b.append(TomlValue(3, lb[lbi], 0, 0.0, "", [], {}))
+                            lbi = lbi + 1
+                        tbl[out_key] = TomlValue(4, False, 0, 0.0, "", arr_b, {})
+            fi = fi + 1
+        root_toml: TomlValue = TomlValue(5, False, 0, 0.0, "", [], tbl)
+        return nox.toml.dump(root_toml)
+
+    def dump_yaml(self: Schema, data: ValidatedData) -> str:
+        mapping: dict[str, YamlValue] = {}
+        fi: int = 0
+        while fi < len(self.fields):
+            f: Field = self.fields[fi]
+            out_key: str = f.name
+            if len(f.json_name) > 0:
+                out_key = f.json_name
+
+            if data.is_null(f.name):
+                mapping[out_key] = YamlValue(4, False, 0, 0.0, "", [], {})
+            elif data.has(f.name):
+                if f.kind == "string":
+                    mapping[out_key] = YamlValue(0, False, 0, 0.0, data.get_str(f.name), [], {})
+                elif f.kind == "int":
+                    mapping[out_key] = YamlValue(1, False, data.get_int(f.name), 0.0, "", [], {})
+                elif f.kind == "float":
+                    mapping[out_key] = YamlValue(2, False, 0, data.get_float(f.name), "", [], {})
+                elif f.kind == "bool":
+                    mapping[out_key] = YamlValue(3, data.get_bool(f.name), 0, 0.0, "", [], {})
+                elif f.kind == "list":
+                    if f.item_kind == "string" or f.item_kind == "str":
+                        ls: list[str] = data.get_list_str(f.name)
+                        arr: list[YamlValue] = []
+                        lsi: int = 0
+                        while lsi < len(ls):
+                            arr.append(YamlValue(0, False, 0, 0.0, ls[lsi], [], {}))
+                            lsi = lsi + 1
+                        mapping[out_key] = YamlValue(5, False, 0, 0.0, "", arr, {})
+                    elif f.item_kind == "int":
+                        li: list[int] = data.get_list_int(f.name)
+                        arr_i: list[YamlValue] = []
+                        lii: int = 0
+                        while lii < len(li):
+                            arr_i.append(YamlValue(1, False, li[lii], 0.0, "", [], {}))
+                            lii = lii + 1
+                        mapping[out_key] = YamlValue(5, False, 0, 0.0, "", arr_i, {})
+                    elif f.item_kind == "float":
+                        lf: list[float] = data.get_list_float(f.name)
+                        arr_f: list[YamlValue] = []
+                        lfi: int = 0
+                        while lfi < len(lf):
+                            arr_f.append(YamlValue(2, False, 0, lf[lfi], "", [], {}))
+                            lfi = lfi + 1
+                        mapping[out_key] = YamlValue(5, False, 0, 0.0, "", arr_f, {})
+                    elif f.item_kind == "bool":
+                        lb: list[bool] = data.get_list_bool(f.name)
+                        arr_b: list[YamlValue] = []
+                        lbi: int = 0
+                        while lbi < len(lb):
+                            arr_b.append(YamlValue(3, lb[lbi], 0, 0.0, "", [], {}))
+                            lbi = lbi + 1
+                        mapping[out_key] = YamlValue(5, False, 0, 0.0, "", arr_b, {})
+            fi = fi + 1
+        root_yaml: YamlValue = YamlValue(6, False, 0, 0.0, "", [], mapping)
+        return nox.yaml.dump(root_yaml)
 
     def to_json_schema(self: Schema, include_defs: bool = True) -> str:
         w: JsonWriter = JsonWriter()

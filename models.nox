@@ -55,6 +55,30 @@ class ModelSchema[T]:
         empty_errs: list[FieldError] = []
         return Result[T](True, obj, empty_errs)
 
+    def validate_toml(self, toml_str: str) -> ValidationResult:
+        return self.schema.validate_toml(toml_str)
+
+    def parse_toml(self, toml_str: str) -> Result[T]:
+        res: ValidationResult = self.schema.validate_toml(toml_str)
+        if not res.is_valid:
+            return Result[T](False, None, res.errors)
+        f: (ValidatedData) -> T = self.factory
+        obj: T = f(res.data)
+        empty_errs: list[FieldError] = []
+        return Result[T](True, obj, empty_errs)
+
+    def validate_yaml(self, yaml_str: str) -> ValidationResult:
+        return self.schema.validate_yaml(yaml_str)
+
+    def parse_yaml(self, yaml_str: str) -> Result[T]:
+        res: ValidationResult = self.schema.validate_yaml(yaml_str)
+        if not res.is_valid:
+            return Result[T](False, None, res.errors)
+        f: (ValidatedData) -> T = self.factory
+        obj: T = f(res.data)
+        empty_errs: list[FieldError] = []
+        return Result[T](True, obj, empty_errs)
+
     def dump(self, data: ValidatedData) -> str:
         return self.schema.dump(data)
 
@@ -91,6 +115,22 @@ class ModelSchema[T]:
         d: ValidatedData = unparser(obj)
         return self.schema.dump_checked(d)
 
+    def dump_toml(self, obj: T, unparser: (T) -> ValidatedData) -> str:
+        d: ValidatedData = unparser(obj)
+        return self.schema.dump_toml(d)
+
+    def to_toml(self, obj: T, unparser: (T) -> ValidatedData) -> str:
+        d: ValidatedData = unparser(obj)
+        return self.schema.dump_toml(d)
+
+    def dump_yaml(self, obj: T, unparser: (T) -> ValidatedData) -> str:
+        d: ValidatedData = unparser(obj)
+        return self.schema.dump_yaml(d)
+
+    def to_yaml(self, obj: T, unparser: (T) -> ValidatedData) -> str:
+        d: ValidatedData = unparser(obj)
+        return self.schema.dump_yaml(d)
+
 class BidirectionalModel[T]:
     model: ModelSchema[T]
     unparser: (T) -> ValidatedData
@@ -123,6 +163,18 @@ class BidirectionalModel[T]:
     def parse_row(self, row: Row) -> Result[T]:
         return self.model.parse_row(row)
 
+    def validate_toml(self, toml_str: str) -> ValidationResult:
+        return self.model.validate_toml(toml_str)
+
+    def parse_toml(self, toml_str: str) -> Result[T]:
+        return self.model.parse_toml(toml_str)
+
+    def validate_yaml(self, yaml_str: str) -> ValidationResult:
+        return self.model.validate_yaml(yaml_str)
+
+    def parse_yaml(self, yaml_str: str) -> Result[T]:
+        return self.model.parse_yaml(yaml_str)
+
     def dump_data(self, data: ValidatedData) -> str:
         return self.model.dump(data)
 
@@ -149,6 +201,22 @@ class BidirectionalModel[T]:
 
     def to_json_checked(self, obj: T) -> str:
         return self.dump_checked(obj)
+
+    def dump_toml(self, obj: T) -> str:
+        u: (T) -> ValidatedData = self.unparser
+        d: ValidatedData = u(obj)
+        return self.model.schema.dump_toml(d)
+
+    def to_toml(self, obj: T) -> str:
+        return self.dump_toml(obj)
+
+    def dump_yaml(self, obj: T) -> str:
+        u: (T) -> ValidatedData = self.unparser
+        d: ValidatedData = u(obj)
+        return self.model.schema.dump_yaml(d)
+
+    def to_yaml(self, obj: T) -> str:
+        return self.dump_yaml(obj)
 
     def to_json_schema(self) -> str:
         return self.model.schema.to_json_schema()
@@ -200,6 +268,26 @@ class Model:
             self.data = res.data
         return res
 
+    # Parses and validates TOML. On failure, preserves existing valid state.
+    def parse_toml(self: Model, toml_str: str) -> ValidationResult:
+        res: ValidationResult = self.schema.validate_toml(toml_str)
+        if res.is_valid:
+            self.data = res.data
+        return res
+
+    def validate_toml(self: Model, toml_str: str) -> ValidationResult:
+        return self.schema.validate_toml(toml_str)
+
+    # Parses and validates YAML. On failure, preserves existing valid state.
+    def parse_yaml(self: Model, yaml_str: str) -> ValidationResult:
+        res: ValidationResult = self.schema.validate_yaml(yaml_str)
+        if res.is_valid:
+            self.data = res.data
+        return res
+
+    def validate_yaml(self: Model, yaml_str: str) -> ValidationResult:
+        return self.schema.validate_yaml(yaml_str)
+
     def dump(self: Model) -> str:
         return self.schema.dump(self.data)
 
@@ -217,6 +305,18 @@ class Model:
 
     def to_json_checked(self: Model) -> str:
         return self.schema.dump_checked(self.data)
+
+    def dump_toml(self: Model) -> str:
+        return self.schema.dump_toml(self.data)
+
+    def to_toml(self: Model) -> str:
+        return self.schema.dump_toml(self.data)
+
+    def dump_yaml(self: Model) -> str:
+        return self.schema.dump_yaml(self.data)
+
+    def to_yaml(self: Model) -> str:
+        return self.schema.dump_yaml(self.data)
 
     def to_json_schema(self: Model) -> str:
         return self.schema.to_json_schema()
@@ -309,3 +409,38 @@ class Model:
 def auto_model(class_name: str) -> Model:
     s: Schema = auto_schema(class_name)
     return Model(s)
+
+# Reusable Model Mixins (Phase 4 — Nox v2.0.61+ multiple inheritance)
+
+class TimestampMixin:
+    created_at: str
+    updated_at: str
+
+    def __init__(self: TimestampMixin) -> None:
+        self.created_at = ""
+        self.updated_at = ""
+
+    def touch(self: TimestampMixin, ts: str) -> None:
+        self.updated_at = ts
+
+class UUIDMixin:
+    id: str
+
+    def __init__(self: UUIDMixin) -> None:
+        self.id = ""
+
+class SoftDeleteMixin:
+    is_deleted: bool
+    deleted_at: str | None
+
+    def __init__(self: SoftDeleteMixin) -> None:
+        self.is_deleted = False
+        self.deleted_at = None
+
+    def mark_deleted(self: SoftDeleteMixin, ts: str) -> None:
+        self.is_deleted = True
+        self.deleted_at = ts
+
+    def restore(self: SoftDeleteMixin) -> None:
+        self.is_deleted = False
+        self.deleted_at = None

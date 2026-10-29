@@ -115,5 +115,21 @@ nox.test.assert_true(nox.strings.contains(checked_bm_json, "\"test@domain.com\""
 nox.test.assert_true(d.has_str("username"), "ValidatedData.has_str callable")
 nox.test.assert_true(len(d.top_level_keys()) > 0, "ValidatedData.top_level_keys callable")
 
-print("NOXEN_RESULT_JSON:{\"test\":\"api_compatibility\",\"symbols_verified\":48,\"valid\":true}")
+# 8. Verify Multi-Format & Mixin Symbols (v0.9.0)
+from noxen import CODE_INVALID_TOML, CODE_INVALID_YAML, TimestampMixin, UUIDMixin, SoftDeleteMixin
+nox.test.assert_eq_str(CODE_INVALID_TOML, "invalid_toml", "CODE_INVALID_TOML stable")
+nox.test.assert_eq_str(CODE_INVALID_YAML, "invalid_yaml", "CODE_INVALID_YAML stable")
+t_mix: TimestampMixin = TimestampMixin()
+t_mix.touch("2026-10-29T12:00:00Z")
+nox.test.assert_eq_str(t_mix.updated_at, "2026-10-29T12:00:00Z", "TimestampMixin.touch callable")
+u_mix: UUIDMixin = UUIDMixin()
+u_mix.id = "uuid-123"
+nox.test.assert_eq_str(u_mix.id, "uuid-123", "UUIDMixin.id assignable")
+sd_mix: SoftDeleteMixin = SoftDeleteMixin()
+sd_mix.mark_deleted("2026-10-29T12:00:00Z")
+nox.test.assert_true(sd_mix.is_deleted, "SoftDeleteMixin.mark_deleted callable")
+sd_mix.restore()
+nox.test.assert_true(not sd_mix.is_deleted, "SoftDeleteMixin.restore callable")
+
+print("NOXEN_RESULT_JSON:{\"test\":\"api_compatibility\",\"symbols_verified\":53,\"valid\":true}")
 print("api_compatibility_test passed")

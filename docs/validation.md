@@ -56,7 +56,7 @@ Strict mode (`COERCION_STRICT`) is enabled by default. Coercion is forbidden unl
 |---|---|---|---|
 | `min_length(n)` | `string` | Character length $\ge n$ | `string_too_short` |
 | `max_length(n)` | `string` | Character length $\le n$ | `string_too_long` |
-| `regex(pat)` | `string` | Must match regex via `nox.regex` | `pattern_mismatch` |
+| `regex(pat)` | `string` | Must match regex via `nox.regex.is_full_match` (fail-fast syntax check) | `pattern_mismatch` |
 | `in_choices(opts)` | `string` | Must belong to allowed string choices | `choice_mismatch` |
 | `email()` | `string` | Valid RFC email format | `invalid_email` |
 | `url()` | `string` | Absolute HTTP/HTTPS URL via `nox.url` | `invalid_url` |
@@ -100,6 +100,8 @@ Database rows (`nox.db.Row`) passed via `DbAdapter[T].parse_row(row)` or `schema
 | Code | Meaning |
 |---|---|
 | `invalid_json` | Input string is not valid JSON syntax |
+| `invalid_toml` | Input string is not valid TOML syntax |
+| `invalid_yaml` | Input string is not valid YAML syntax |
 | `expected_object` | Root or nested structure was expected to be an object |
 | `missing_field` | A required field/column is missing |
 | `unexpected_null` | A non-nullable field/column received `null` |

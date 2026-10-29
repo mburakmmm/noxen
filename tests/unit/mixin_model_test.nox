@@ -1,0 +1,65 @@
+# tests/unit/mixin_model_test.nox
+# Verifies reusable model mixins (TimestampMixin, UUIDMixin, SoftDeleteMixin)
+# using Nox v2.0.61+ multiple inheritance and compile-time mixin flattening.
+
+import nox.test
+import schema
+import models
+from schema import Schema
+from models import Model, TimestampMixin, UUIDMixin, SoftDeleteMixin
+from core import ValidationResult
+
+article_schema: Schema = Schema("Article")
+article_schema.field_str("title").min_length(3)
+article_schema.field_str("content").min_length(10)
+
+class AuditedArticle(Model, TimestampMixin, UUIDMixin, SoftDeleteMixin):
+    title: str
+
+    def __init__(self: AuditedArticle, schema: Schema, title: str, id_val: str) -> None:
+        super().__init__(schema)
+        self.title = title
+        self.id = id_val
+        self.created_at = "2026-10-29T10:00:00Z"
+        self.updated_at = "2026-10-29T10:00:00Z"
+        self.is_deleted = False
+        self.deleted_at = None
+
+    # Property-based verified getter/setter demonstration
+    @property
+    def summary(self: AuditedArticle) -> str:
+        return self.id + ": " + self.title
+
+art: AuditedArticle = AuditedArticle(article_schema, "Architecting with Noxen", "art-404")
+
+# 1. Verify fields initialized
+nox.test.assert_eq_str(art.id, "art-404", "UUIDMixin.id accessible")
+nox.test.assert_eq_str(art.created_at, "2026-10-29T10:00:00Z", "TimestampMixin.created_at accessible")
+nox.test.assert_eq_str(art.updated_at, "2026-10-29T10:00:00Z", "TimestampMixin.updated_at accessible")
+nox.test.assert_true(not art.is_deleted, "SoftDeleteMixin.is_deleted is False")
+nox.test.assert_true(art.deleted_at is None, "SoftDeleteMixin.deleted_at is None")
+
+# 2. Verify touch() method from TimestampMixin
+art.touch("2026-10-29T15:30:00Z")
+nox.test.assert_eq_str(art.updated_at, "2026-10-29T15:30:00Z", "touch updates updated_at")
+
+# 3. Verify mark_deleted() and restore() from SoftDeleteMixin
+art.mark_deleted("2026-10-29T15:45:00Z")
+nox.test.assert_true(art.is_deleted, "mark_deleted sets is_deleted to True")
+del_at: str | None = art.deleted_at
+nox.test.assert_true(del_at is not None, "deleted_at is set")
+
+art.restore()
+nox.test.assert_true(not art.is_deleted, "restore sets is_deleted to False")
+nox.test.assert_true(art.deleted_at is None, "restore clears deleted_at")
+
+# 4. Verify property accessor
+nox.test.assert_eq_str(art.summary, "art-404: Architecting with Noxen", "@property summary getter works")
+
+# 5. Verify Model capabilities remain intact (JSON parsing/validation)
+parse_res: ValidationResult = art.parse_json("{\"title\":\"Architecting with Noxen\",\"content\":\"Deep architectural dive into static data modeling.\"}")
+nox.test.assert_true(parse_res.is_valid, "Inherited Model.parse_json functions correctly")
+nox.test.assert_eq_str(art.get_str("content"), "Deep architectural dive into static data modeling.", "Model.get_str functional")
+
+print("NOXEN_RESULT_JSON:{\"test\":\"mixin_model\",\"valid\":true,\"mixins_verified\":3,\"property_verified\":true}")
+print("mixin_model_test passed")

@@ -1,0 +1,141 @@
+# tests/integration/toml_yaml_test.nox
+# Integration tests for TOML (nox.toml) and YAML (nox.yaml) validation, parsing, and serialization.
+
+import nox.test
+import nox.strings
+import schema
+import models
+import errors
+from schema import Schema
+from models import Model, ModelSchema, BidirectionalModel
+from core import ValidatedData, ValidationResult, Result
+from errors import CODE_INVALID_TOML, CODE_INVALID_YAML, CODE_OUT_OF_RANGE, CODE_MISSING_FIELD
+
+# =========================================================================
+# 1. TOML Validation & Parsing
+# =========================================================================
+
+server_schema: Schema = Schema("ServerConfig")
+server_schema.field_str("name").min_length(3).max_length(50)
+server_schema.field_int("port").min(1024.0).max(65535.0)
+server_schema.field_bool("tls").default_b(False)
+server_schema.field_list("hosts", "string").optional()
+
+valid_toml: str = "name = \"production-api\"\nport = 8443\ntls = true\nhosts = [\"api1.domain.com\", \"api2.domain.com\"]\n"
+
+# 1.1 Valid TOML validation
+res_toml: ValidationResult = server_schema.validate_toml(valid_toml)
+nox.test.assert_true(res_toml.is_valid, "Valid TOML passes schema validation")
+nox.test.assert_eq_str(res_toml.data.get_str("name"), "production-api", "TOML parsed string field")
+nox.test.assert_eq_int(res_toml.data.get_int("port"), 8443, "TOML parsed int field")
+nox.test.assert_true(res_toml.data.get_bool("tls"), "TOML parsed bool field")
+nox.test.assert_eq_int(len(res_toml.data.get_list_str("hosts")), 2, "TOML parsed list_str field")
+
+# 1.2 Invalid TOML syntax
+bad_toml_syntax: str = "name = 'broken\nport = [1, 2"
+res_bad_toml: ValidationResult = server_schema.validate_toml(bad_toml_syntax)
+nox.test.assert_true(not res_bad_toml.is_valid, "Malformed TOML fails validation")
+nox.test.assert_eq_str(res_bad_toml.errors[0].code, CODE_INVALID_TOML, "Malformed TOML error code is invalid_toml")
+
+# 1.3 TOML with semantic validation failure (port out of range)
+invalid_range_toml: str = "name = \"dev-api\"\nport = 80\ntls = false\n"
+res_range_toml: ValidationResult = server_schema.validate_toml(invalid_range_toml)
+nox.test.assert_true(not res_range_toml.is_valid, "Port out of range fails in TOML")
+nox.test.assert_eq_str(res_range_toml.errors[0].code, CODE_OUT_OF_RANGE, "Error code is out_of_range")
+
+# 1.4 Model.parse_toml and Model.to_toml
+server_model: Model = Model(server_schema)
+parse_m_res: ValidationResult = server_model.parse_toml(valid_toml)
+nox.test.assert_true(parse_m_res.is_valid, "Model.parse_toml succeeds")
+nox.test.assert_eq_str(server_model.get_str("name"), "production-api", "Model.get_str after parse_toml")
+nox.test.assert_eq_int(server_model.get_int("port"), 8443, "Model.get_int after parse_toml")
+
+dumped_toml: str = server_model.to_toml()
+nox.test.assert_true(nox.strings.contains(dumped_toml, "production-api"), "to_toml contains name")
+nox.test.assert_true(nox.strings.contains(dumped_toml, "8443"), "to_toml contains port")
+
+# Round-trip check: parse the dumped TOML back
+rt_toml_res: ValidationResult = server_schema.validate_toml(dumped_toml)
+nox.test.assert_true(rt_toml_res.is_valid, "Dumped TOML round-trips cleanly")
+nox.test.assert_eq_str(rt_toml_res.data.get_str("name"), "production-api", "Round-trip name preserved")
+nox.test.assert_eq_int(rt_toml_res.data.get_int("port"), 8443, "Round-trip port preserved")
+
+# =========================================================================
+# 2. YAML Validation & Parsing
+# =========================================================================
+
+user_schema: Schema = Schema("UserProfile")
+user_schema.field_str("username").min_length(2)
+user_schema.field_int("age").min(0.0).max(150.0)
+user_schema.field_float("rating").default_f(5.0)
+user_schema.field_list("skills", "string").optional()
+
+valid_yaml: str = "username: ada_lovelace\nage: 36\nrating: 9.8\nskills:\n  - math\n  - algorithms\n"
+
+# 2.1 Valid YAML validation
+res_yaml: ValidationResult = user_schema.validate_yaml(valid_yaml)
+nox.test.assert_true(res_yaml.is_valid, "Valid YAML passes schema validation")
+nox.test.assert_eq_str(res_yaml.data.get_str("username"), "ada_lovelace", "YAML parsed username")
+nox.test.assert_eq_int(res_yaml.data.get_int("age"), 36, "YAML parsed age")
+nox.test.assert_true(res_yaml.data.get_float("rating") > 9.0, "YAML parsed rating")
+nox.test.assert_eq_int(len(res_yaml.data.get_list_str("skills")), 2, "YAML parsed skills list")
+
+# 2.2 Invalid YAML syntax
+bad_yaml_syntax: str = "username: [unclosed\n  age: %%%"
+res_bad_yaml: ValidationResult = user_schema.validate_yaml(bad_yaml_syntax)
+nox.test.assert_true(not res_bad_yaml.is_valid, "Malformed YAML fails validation")
+nox.test.assert_eq_str(res_bad_yaml.errors[0].code, CODE_INVALID_YAML, "Malformed YAML error code is invalid_yaml")
+
+# 2.3 YAML with missing required field
+missing_yaml: str = "age: 36\n"
+res_missing_yaml: ValidationResult = user_schema.validate_yaml(missing_yaml)
+nox.test.assert_true(not res_missing_yaml.is_valid, "Missing required username in YAML fails")
+nox.test.assert_eq_str(res_missing_yaml.errors[0].code, CODE_MISSING_FIELD, "Error code is missing_field")
+
+# 2.4 Model.parse_yaml and Model.to_yaml
+user_model: Model = Model(user_schema)
+parse_yaml_res: ValidationResult = user_model.parse_yaml(valid_yaml)
+nox.test.assert_true(parse_yaml_res.is_valid, "Model.parse_yaml succeeds")
+nox.test.assert_eq_str(user_model.get_str("username"), "ada_lovelace", "Model username after parse_yaml")
+nox.test.assert_eq_int(user_model.get_int("age"), 36, "Model age after parse_yaml")
+
+dumped_yaml: str = user_model.to_yaml()
+nox.test.assert_true(nox.strings.contains(dumped_yaml, "ada_lovelace"), "to_yaml contains username")
+nox.test.assert_true(nox.strings.contains(dumped_yaml, "36"), "to_yaml contains age")
+
+# Round-trip check: parse the dumped YAML back
+rt_yaml_res: ValidationResult = user_schema.validate_yaml(dumped_yaml)
+nox.test.assert_true(rt_yaml_res.is_valid, "Dumped YAML round-trips cleanly")
+nox.test.assert_eq_str(rt_yaml_res.data.get_str("username"), "ada_lovelace", "Round-trip username preserved")
+nox.test.assert_eq_int(rt_yaml_res.data.get_int("age"), 36, "Round-trip age preserved")
+
+# =========================================================================
+# 3. Typed ModelSchema[T] with TOML and YAML
+# =========================================================================
+
+class ServerObj:
+    name: str
+    port: int
+    def __init__(self, name: str, port: int) -> None:
+        self.name = name
+        self.port = port
+
+def server_factory(d: ValidatedData) -> ServerObj:
+    return ServerObj(d.get_str("name"), d.get_int("port"))
+
+ms_server: ModelSchema[ServerObj] = ModelSchema[ServerObj](server_schema, server_factory)
+
+parsed_toml_obj: Result[ServerObj] = ms_server.parse_toml(valid_toml)
+nox.test.assert_true(parsed_toml_obj.is_ok, "ModelSchema.parse_toml succeeds")
+so_toml: ServerObj = parsed_toml_obj.unwrap()
+nox.test.assert_eq_str(so_toml.name, "production-api", "Typed ServerObj name from TOML")
+nox.test.assert_eq_int(so_toml.port, 8443, "Typed ServerObj port from TOML")
+
+parsed_yaml_obj: Result[ServerObj] = ms_server.parse_yaml("name: yaml-api\nport: 9090\n")
+nox.test.assert_true(parsed_yaml_obj.is_ok, "ModelSchema.parse_yaml succeeds")
+so_yaml: ServerObj = parsed_yaml_obj.unwrap()
+nox.test.assert_eq_str(so_yaml.name, "yaml-api", "Typed ServerObj name from YAML")
+nox.test.assert_eq_int(so_yaml.port, 9090, "Typed ServerObj port from YAML")
+
+print("NOXEN_RESULT_JSON:{\"test\":\"toml_yaml\",\"valid\":true,\"toml_verified\":true,\"yaml_verified\":true,\"roundtrip_verified\":true}")
+print("toml_yaml_test passed")

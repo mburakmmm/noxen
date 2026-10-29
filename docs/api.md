@@ -55,8 +55,12 @@ The root validation engine for structured data.
 * `add_validator(fn: (ValidatedData) -> list[FieldError]) -> None`: Registers a cross-field custom validator callback.
 * `validate(v: JsonValue) -> ValidationResult`: Validates an in-memory `JsonValue` tree.
 * `validate_json(json_str: str) -> ValidationResult`: Parses and validates a JSON string.
+* `validate_toml(toml_str: str) -> ValidationResult`: Parses and validates a TOML string using standard `nox.toml`.
+* `validate_yaml(yaml_str: str) -> ValidationResult`: Parses and validates a YAML string using standard `nox.yaml`.
 * `validate_row(row: Row) -> ValidationResult`: Validates a database `nox.db.Row` against schema constraints.
 * `dump(data: ValidatedData) -> str`: Automatically serializes validated data to JSON according to schema fields, aliases, nullability, nested models, and lists.
+* `dump_toml(data: ValidatedData) -> str`: Automatically serializes validated data to TOML.
+* `dump_yaml(data: ValidatedData) -> str`: Automatically serializes validated data to YAML.
 * `to_json_schema() -> str`: Generates standard JSON Schema Draft 2020-12 specification with `$defs` and `$ref`.
 
 ### `Field` (`schema.nox` / `fields.nox`)
@@ -100,15 +104,23 @@ Generic wrapper mapping raw validated data into strongly typed Nox classes.
 * `ModelSchema[T](schema: Schema, factory: (ValidatedData) -> T)`
 * `parse(v: JsonValue) -> Result[T]`: Validates `JsonValue` and returns `Result[T]` with typed instance.
 * `parse_json(json_str: str) -> Result[T]`: Parses JSON, validates, and returns `Result[T]` with typed instance.
+* `parse_toml(toml_str: str) -> Result[T]`: Parses TOML, validates, and returns `Result[T]` with typed instance.
+* `parse_yaml(yaml_str: str) -> Result[T]`: Parses YAML, validates, and returns `Result[T]` with typed instance.
 * `parse_row(row: Row) -> Result[T]`: Validates database row and returns `Result[T]` with typed instance.
 * `validate(v: JsonValue) -> ValidationResult`: Validates `JsonValue` tree and returns `ValidationResult`.
 * `validate_json(json_str: str) -> ValidationResult`: Validates JSON text and returns `ValidationResult`.
+* `validate_toml(toml_str: str) -> ValidationResult`: Validates TOML text and returns `ValidationResult`.
+* `validate_yaml(yaml_str: str) -> ValidationResult`: Validates YAML text and returns `ValidationResult`.
 * `validate_row(row: Row) -> ValidationResult`: Validates database row and returns `ValidationResult`.
 * `dump(data: ValidatedData) -> str`: Automatically serializes validated data to JSON through the underlying schema.
+* `dump_toml(data: ValidatedData) -> str`: Automatically serializes validated data to TOML through the underlying schema.
+* `dump_yaml(data: ValidatedData) -> str`: Automatically serializes validated data to YAML through the underlying schema.
 * `dump_validated(data: ValidatedData) -> str`: Serializes and re-validates data against schema constraints, raising `ValidationError` on violations.
 * `dump_model(obj: T, unparser: (T) -> ValidatedData) -> str`: Automatically serializes a typed model object to JSON via an unparser closure.
 * `dump_model_validated(obj: T, unparser: (T) -> ValidatedData) -> str`: Serializes and re-validates typed model object to JSON, raising `ValidationError` on violations.
 * `to_json(obj: T, unparser: (T) -> ValidatedData) -> str`: Alias for `dump_model`.
+* `to_toml(obj: T, unparser: (T) -> ValidatedData) -> str`: Serializes a typed model object to TOML via an unparser closure.
+* `to_yaml(obj: T, unparser: (T) -> ValidatedData) -> str`: Serializes a typed model object to YAML via an unparser closure.
 * `to_json_validated(obj: T, unparser: (T) -> ValidatedData) -> str`: Alias for `dump_model_validated`.
 
 ### `BidirectionalModel[T]` (`models.nox`)
@@ -117,13 +129,34 @@ Bidirectional model combining typed parsing with automated typed serialization (
 * `BidirectionalModel[T](model: ModelSchema[T], unparser: (T) -> ValidatedData)`
 * `parse(v: JsonValue) -> Result[T]`: Parses from `JsonValue` to typed `T`.
 * `parse_json(json_str: str) -> Result[T]`: Parses from JSON text to typed `T`.
+* `parse_toml(toml_str: str) -> Result[T]`: Parses from TOML text to typed `T`.
+* `parse_yaml(yaml_str: str) -> Result[T]`: Parses from YAML text to typed `T`.
 * `parse_row(row: Row) -> Result[T]`: Parses from database row to typed `T`.
 * `dump(obj: T) -> str`: Fast direct serialization from typed model object `T` to JSON.
+* `dump_toml(obj: T) -> str`: Fast direct serialization from typed model object `T` to TOML.
+* `dump_yaml(obj: T) -> str`: Fast direct serialization from typed model object `T` to YAML.
 * `dump_validated(obj: T) -> str`: Serializes and re-validates model state against schema constraints, raising `ValidationError` on failure.
 * `validate_model(obj: T) -> ValidationResult`: Non-throwing validation inspection returning `ValidationResult`.
 * `to_json(obj: T) -> str`: Alias for `dump(obj: T)`.
+* `to_toml(obj: T) -> str`: Alias for `dump_toml(obj: T)`.
+* `to_yaml(obj: T) -> str`: Alias for `dump_yaml(obj: T)`.
 * `to_json_validated(obj: T) -> str`: Alias for `dump_validated(obj: T)`.
 * `dump_data(data: ValidatedData) -> str`: Serializes raw `ValidatedData` to JSON.
+
+### Model Mixins (`models.nox`)
+Reusable entity mixin classes for standard multiple inheritance.
+
+* `TimestampMixin`: Tracks creation and modification timestamps:
+  - `created_at: str`: ISO 8601 creation timestamp.
+  - `updated_at: str`: ISO 8601 modification timestamp.
+  - `touch(ts: str) -> None`: Updates `updated_at` to the given timestamp.
+* `UUIDMixin`: Provides canonical entity identification:
+  - `id: str`: Canonical UUID string.
+* `SoftDeleteMixin`: Provides non-destructive deletion flags:
+  - `is_deleted: bool`: True if the entity is soft-deleted.
+  - `deleted_at: str`: ISO 8601 timestamp when deleted (empty string if active).
+  - `mark_deleted(ts: str) -> None`: Sets `is_deleted = true` and `deleted_at = ts`.
+  - `restore() -> None`: Sets `is_deleted = false` and `deleted_at = ""`.
 
 ### `Result[T]` (`core.nox`)
 Generic result container representing validation outcome.

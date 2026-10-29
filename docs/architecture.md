@@ -125,6 +125,15 @@ Dependency flow is strictly unidirectional with no circular dependencies.
 - **Pure Mathematical IEEE 754 Finiteness**: Uses `is_finite_float(v)` based on mathematical IEEE 754 axioms (`v != v` detecting NaN; `(v - v) != 0.0` detecting +-Infinity) rather than string formatting.
 - **Negative Zero (-0.0) Round-Trip Preservation**: Both `Serializer.float` and `Schema.dump` preserve IEEE 754 `-0.0` through JSON serialization and re-parsing (`1.0 / -0.0 == -inf`).
 
+### 3.8 Multi-Format Serialization Architecture (`schema.nox`, `models.nox`)
+- **Native TOML & YAML Support**: Seamless multi-format data ingestion and serialization powered directly by `nox.toml` and `nox.yaml`.
+- **Zero-Loss Data Bridging**: Uses native type converters translating `TomlValue` and `YamlValue` into Noxen's internal validation representation without losing string precision or quote escaping (`nox.json.dump_string`).
+- **Unified Typed API**: `validate_toml`, `parse_toml`, `to_toml` and `validate_yaml`, `parse_yaml`, `to_yaml` are exposed across `Schema`, `ModelSchema[T]`, `BidirectionalModel[T]`, and `Model`.
+
+### 3.9 Reusable Model Mixins (`models.nox`)
+- **Phase 4 Multiple Inheritance**: Standard mixin classes providing common model behavior and fields (`TimestampMixin`, `UUIDMixin`, `SoftDeleteMixin`).
+- **Zero Runtime Overhead**: Mixins are flattened and checked at compile time by the Nox compiler, preserving strict static typing and field layouts without dynamic vtables or reflection penalties.
+
 ## 4. Framework-Independent Adapter Architecture
 
 In strict conformance with AGENTS.md §0 and §2:

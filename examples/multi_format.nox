@@ -1,0 +1,50 @@
+# examples/multi_format.nox
+# Demonstrates multi-format parsing and validation across JSON, TOML, and YAML
+# along with regular expressions and model mixins.
+
+import noxen
+import models
+from noxen import Schema
+from models import Model, TimestampMixin, UUIDMixin
+from core import ValidationResult
+
+# 1. Define an API Service configuration schema
+config_schema: Schema = Schema("ServiceConfig")
+config_schema.field_str("env").regex("^(development|staging|production)$")
+config_schema.field_str("host").min_length(3)
+config_schema.field_int("port").min(1024.0).max(65535.0)
+config_schema.field_bool("debug").default_b(False)
+
+# 2. Parse from TOML
+toml_input: str = "env = \"production\"\nhost = \"0.0.0.0\"\nport = 8080\ndebug = false\n"
+model_toml: Model = Model(config_schema)
+res_toml: ValidationResult = model_toml.parse_toml(toml_input)
+print("TOML Valid:", res_toml.is_valid, "Port:", model_toml.get_int("port"))
+
+# 3. Parse from YAML
+yaml_input: str = "env: staging\nhost: 127.0.0.1\nport: 3000\ndebug: true\n"
+model_yaml: Model = Model(config_schema)
+res_yaml: ValidationResult = model_yaml.parse_yaml(yaml_input)
+print("YAML Valid:", res_yaml.is_valid, "Host:", model_yaml.get_str("host"))
+
+# 4. Convert and Dump between formats
+print("Exported to TOML from YAML data:")
+print(model_yaml.to_toml())
+
+print("Exported to JSON:")
+print(model_yaml.to_json())
+
+# 5. Model Mixins demonstration
+class ManagedService(Model, TimestampMixin, UUIDMixin):
+    service_name: str
+    def __init__(self: ManagedService, s: Schema, name: str, uid: str) -> None:
+        super().__init__(s)
+        self.service_name = name
+        self.id = uid
+        self.created_at = "2026-10-29T12:00:00Z"
+        self.updated_at = "2026-10-29T12:00:00Z"
+
+svc: ManagedService = ManagedService(config_schema, "auth-service", "srv-991")
+print("Managed Service ID:", svc.id, "Created:", svc.created_at)
+
+print("NOXEN_RESULT_JSON:{\"example\":\"multi_format\",\"valid\":true,\"toml_ok\":true,\"yaml_ok\":true}")

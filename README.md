@@ -5,7 +5,7 @@
 [![CI](https://github.com/mburakmmm/noxen/actions/workflows/ci.yml/badge.svg)](https://github.com/mburakmmm/noxen/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/mburakmmm/noxen?color=007ec6&label=release)](https://github.com/mburakmmm/noxen/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Nox Toolchain](https://img.shields.io/badge/noxc-2.0.27+-00bcd4.svg)](https://noxlang.com)
+[![Nox Toolchain](https://img.shields.io/badge/noxc-2.0.63+-00bcd4.svg)](https://noxlang.com)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-success.svg)](https://github.com/mburakmmm/noxen/actions)
 [![JSON Schema](https://img.shields.io/badge/JSON%20Schema-Draft%202020--12-792ee5.svg)](https://json-schema.org)
 
@@ -51,6 +51,9 @@
 ### Highlights
 
 * **Automatic Schema Derivation (`auto_schema`)**: Construct schemas automatically from class declarations using Nox's standard library reflection (`nox.reflect`). Recursively resolves nested classes, nullable optionals (`T | None`), and lists (`list[T]`), with built-in recursive cycle protection and strict unsupported type rejection.
+* **Native Multi-Format Serialization (JSON, TOML & YAML)**: Parse and serialize data seamlessly across JSON (`validate_json`/`to_json`), TOML (`validate_toml`/`to_toml`), and YAML (`validate_yaml`/`to_yaml`) using Nox standard libraries `nox.toml` and `nox.yaml`.
+* **Full Engine `nox.regex` Integration**: Standardized pattern validation with full-string matching (`nox.regex.is_full_match`) and fail-fast syntax verification via `RegexError` at schema definition time.
+* **Reusable Model Mixins (Phase 4)**: Out-of-the-box multiple-inheritance mixins (`TimestampMixin`, `UUIDMixin`, `SoftDeleteMixin`) for automatic entity tracking, auditing, and soft deletes.
 * **Statically Typed Models**: Bind incoming JSON directly into strongly typed Nox classes with compile-time safety via monomorphised generic `ModelSchema[T]` and explicit, type-safe factory closures.
 * **Strict by Default**: Extra fields are rejected by default (`POLICY_FORBID`), and implicit type coercions are disallowed in strict mode.
 * **Non-Finite Float Rejection**: Strict RFC 8259 compliance rejecting `NaN`, `Infinity`, and `-Infinity` across both JSON parsing and serializer dump paths (`Serializer.float` raises `ValueError`). Preserves exact IEEE 754 negative zero (`-0.0`) signs.
@@ -72,7 +75,7 @@
 
 ## Minimum Requirements
 
-* **Compiler**: `noxc 2.0.27` or newer
+* **Compiler**: `noxc 2.0.63` or newer
 * **Backend**: LLVM (default) or QBE
 * **Platform**: macOS (ARM64/x64), Linux (x64/ARM64), Windows (x64)
 
@@ -90,7 +93,7 @@ Add Noxen to your project's `nox.json`:
     {
       "alias": "noxen",
       "repo": "github.com/mburakmmm/noxen",
-      "ref": "v0.8.3"
+      "ref": "v0.9.0"
     }
   ]
 }
@@ -474,6 +477,10 @@ noxc run --backend qbe benchmarks/run_benchmarks.nox
 | String length & regex bounds | Supported | `min_length`, `max_length`, `regex` |
 | Numeric bounds | Supported | `min`, `max`, `ge`, `le`, `gt`, `lt` |
 | Choices & Enums | Supported | `in_choices` (strings), `in_choices_int` (integers) |
+| Multi-Format TOML | Supported | `validate_toml`, `parse_toml`, `to_toml`, `dump_toml` via native `nox.toml` |
+| Multi-Format YAML | Supported | `validate_yaml`, `parse_yaml`, `to_yaml`, `dump_yaml` via native `nox.yaml` |
+| Native Regex Engine | Supported | Full-match validation (`Regex.is_full_match`) and fail-fast syntax checking with `RegexError` |
+| Reusable Model Mixins | Supported | `TimestampMixin`, `UUIDMixin`, and `SoftDeleteMixin` for multiple inheritance |
 | Field Aliases | Supported | `.alias("json_key")` |
 | Nested Objects | Supported | `.field_object("address", addr_schema)` |
 | Multi-Level Nested Arrays | Supported | `.field_list_schema("employees", emp_schema)` with deep dot-and-index error paths |
@@ -509,7 +516,7 @@ Run the full test suite with:
 noxc test
 ```
 
-All 31 unit, integration, and fuzz test suites pass cleanly across Linux, macOS, and Windows CI:
+All 35 unit, integration, and fuzz test suites pass cleanly across Linux, macOS, and Windows CI:
 
 ```text
 alias_test passed
@@ -533,18 +540,22 @@ integer_precision_test passed
 json_schema_defs_test passed
 json_schema_test passed
 limits_test passed
+mixin_model_test passed
 nested_array_test passed
 nested_profile_test passed
 policy_allow_test passed
 property_test passed
+regex_engine_test passed
 secret_redaction_test passed
 serialization_test passed
 serializer_strict_test passed
+toml_yaml_test passed
 unknown_fields_test passed
 user_model_test passed
+validate_data_parity_test passed
 validators_test passed
 
-31 passed, 0 failed (31 total)
+35 passed, 0 failed (35 total)
 ```
 
 ---

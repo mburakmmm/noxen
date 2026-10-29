@@ -5,6 +5,37 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-10-29
+
+### Added
+- **Native Multi-Format Serialization (TOML & YAML)**:
+  - Added native multi-format parsing, validation, and serialization powered by Nox stdlib `nox.toml` and `nox.yaml`:
+    - `Schema.validate_toml(toml_str: str) -> ValidationResult`
+    - `Schema.validate_yaml(yaml_str: str) -> ValidationResult`
+    - `Schema.dump_toml(data: ValidatedData) -> str`
+    - `Schema.dump_yaml(data: ValidatedData) -> str`
+  - Extended typed model ergonomics across `ModelSchema[T]`, `BidirectionalModel[T]`, and `Model`:
+    - `validate_toml(str) -> ValidationResult`, `parse_toml(str) -> T`
+    - `validate_yaml(str) -> ValidationResult`, `parse_yaml(str) -> T`
+    - `to_toml(instance: T) -> str`, `dump_toml() -> str`
+    - `to_yaml(instance: T) -> str`, `dump_yaml() -> str`
+  - Added error codes `CODE_INVALID_TOML` (`"invalid_toml"`) and `CODE_INVALID_YAML` (`"invalid_yaml"`).
+  - Added integration test suite `tests/integration/toml_yaml_test.nox` and comprehensive example `examples/multi_format.nox`.
+- **Full Engine `nox.regex` Integration & Fail-Fast Pattern Validation**:
+  - Upgraded field pattern validation from partial matching to full string matching using `nox.regex.is_full_match` across all validation paths (`validate_at`, `validate_data_at`, `validate_raw_at`).
+  - Added fail-fast syntax checking in `Field.regex(pat: str)`: malformed regular expressions are validated at schema definition time via `RegexError` capture and immediately raise `ValueError`.
+  - Added dedicated unit test suite `tests/unit/regex_engine_test.nox`.
+- **Reusable Model Mixins (Phase 4 Multiple Inheritance)**:
+  - Added standard library model mixins in `models.nox` and exported in `noxen.nox`:
+    - `TimestampMixin`: provides `created_at: str`, `updated_at: str`, and `touch(ts: str)`.
+    - `UUIDMixin`: provides `id: str`.
+    - `SoftDeleteMixin`: provides `is_deleted: bool`, `deleted_at: str`, `mark_deleted(ts: str)`, and `restore()`.
+  - Added unit test suite `tests/unit/mixin_model_test.nox` testing single and multi-mixin model classes with JSON serialization and round-trips.
+- **CI Toolchain Upgrade to Nox 2.0.63**:
+  - Upgraded pinned `NOX_VERSION` in `.github/workflows/ci.yml` from `v2.0.27` to `v2.0.63` across Linux/macOS and Windows runners.
+  - Added `examples/multi_format.nox` to CI execution matrix.
+  - Updated API compatibility suite `tests/unit/api_compatibility_test.nox` verifying all 53 public symbols.
+
 ## [0.8.3] - 2026-10-26
 
 ### Added

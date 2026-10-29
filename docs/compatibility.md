@@ -1,12 +1,12 @@
 # Compatibility Matrix & Environment Audit — Noxen
 
-> Status: Verified against `noxc 2.0.27` on Darwin arm64.
+> Status: Verified against `noxc 2.0.63` on Darwin arm64, Linux x86_64, Windows x86_64.
 
 ## 1. Toolchain & Runtime Baseline
 
 | Attribute | Verified Value | Evidence |
 |---|---|---|
-| Compiler version | `noxc 2.0.27` | `noxc --version` output |
+| Compiler version | `noxc 2.0.63` (supports up to `v2.0.68` language specifications) | `noxc --version` output |
 | Compiler path | `/Users/melihburakmemis/.nox-lang/bin/noxc` | `which noxc` |
 | Default backend | LLVM (`--backend llvm`) | `noxc --help` / `docs/tools/noxc.md` |
 | Fallback backend | QBE (`--backend qbe`) | Freestanding / line debug (`-g`) |
@@ -107,6 +107,27 @@
 ### Generic Method vs Free Function Monomorphisation
 - **Finding**: In Nox 2.0.27, generic type brackets `[T]` are valid on classes (`class DbAdapter[T]: ...`), but calling generic free functions `def fn[T](...) -> ...` fails with `unknown generic constructor: fn`.
 - **Decision**: All generic operations are modeled as methods on monomorphised classes (`ModelSchema[T]`, `Result[T]`, `DbAdapter[T]`, `BidirectionalModel[T]`). Non-generic helpers remain free functions.
+
+## 6. Nox 2.0.63+ Capabilities & Multi-Format Validation (v0.9.0)
+
+### `nox.regex`
+- Full backtracking regular expression engine with `is_full_match()`, `full_match()`, `search()`, `RegexError`.
+- Replaces partial substring matching with whole-string anchor compliance and fail-fast syntax checking during schema declaration (`Field.regex()`).
+
+### `nox.toml`
+- TOML 1.0 engine (`TomlValue`, `TomlError`, `parse`, `dump`, `get`).
+- Direct integration into `Schema.validate_toml()` and `Model.parse_toml()`.
+
+### `nox.yaml`
+- YAML 1.2 core schema engine (`YamlValue`, `YamlError`, `parse`, `dump`, `get`).
+- Direct integration into `Schema.validate_yaml()` and `Model.parse_yaml()`.
+
+### Multiple Inheritance / Mixins
+- Supported via `class C(A, B, D)` compile-time mixin flattening.
+- Reusable model mixins: `TimestampMixin`, `UUIDMixin`, `SoftDeleteMixin`.
+
+### Modern Properties
+- `@property` and `@name.setter` verified for validated attribute access on model instances.
 
 ## 6. Compiler Invariants & Architecture Discoveries (v0.4.0)
 
