@@ -1,0 +1,45 @@
+# fast_adapters.nox — Demonstrates optional desktop yyjson (JSON/JSON5), PCRE2 JIT regex, CSV, NDJSON, and Protobuf adapters.
+
+import nox.decimal
+import schema
+import core
+import pcre2_adapter
+import yyjson_adapter
+import protobuf_adapter
+import csv_adapter
+from nox.decimal import Decimal
+from schema import Schema, auto_schema
+from core import ValidatedData, ValidationResult, ValidationOutcome
+from pcre2_adapter import compile_pcre2_validator
+from yyjson_adapter import validate_yyjson5
+from protobuf_adapter import ProtoMapping, encode_proto, decode_proto
+from csv_adapter import validate_csv
+
+@dataclass
+@field_bounds("amount", "0.01", "50000.00")
+@field_strip("code")
+class FastOrder:
+    id: int
+    code: str
+    amount: Decimal
+
+def run_fast_adapters_demo() -> None:
+    s: Schema = auto_schema("FastOrder")
+    # Desktop JIT PCRE2 regex constraint (repeated prefix backreference e.g. "ord-ord")
+    s.add_validator(compile_pcre2_validator("code", "^(?P<p>[a-z]+)-(?P=p)$", "Code must mirror prefix"))
+
+    # 1. JSON5 input parsed via zero-copy yyjson
+    vr_j5: ValidationResult = validate_yyjson5(s, "{ id: 9007199254740993, code: '  pay-pay ', amount: '42.50' }")
+    print("yyjson5 valid:", vr_j5.is_valid, "id:", vr_j5.data.get_int("id"), "code:", vr_j5.data.get_str("code"))
+
+    # 2. Encode & validate binary Protobuf roundtrip
+    pm: ProtoMapping = ProtoMapping(s).auto_tags()
+    wire: list[int] = encode_proto(pm, vr_j5.data)
+    vr_pb: ValidationResult = decode_proto(pm, wire)
+    print("protobuf roundtrip valid:", vr_pb.is_valid, "wire bytes:", len(wire))
+
+    # 3. Streaming CSV + NDJSON
+    csv_res: list[ValidationResult] = validate_csv(s, "id,code,amount\n10,pay-pay,12.00\n11,bad-code,5.00\n")
+    print("csv rows:", len(csv_res), "row0 valid:", csv_res[0].is_valid, "row1 valid:", csv_res[1].is_valid)
+
+run_fast_adapters_demo()

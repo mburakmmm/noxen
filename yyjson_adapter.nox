@@ -1,0 +1,560 @@
+# yyjson_adapter.nox — Optional desktop high-speed JSON & JSON5/relaxed validation adapter powered by nox.yyjson.
+#
+# STANDALONE OPTIONAL ADAPTER:
+# This module is NEVER imported by core `noxen.nox` or `schema.nox` because `nox.yyjson` links against
+# desktop `noxclibs.a` and is unavailable on WebAssembly (`wasm32-wasi`) and mobile targets.
+#
+# KNOWN DIFFERENCE FROM CORE `Schema.validate_json` (`nox.json`):
+# `nox.yyjson` does NOT reject duplicate JSON object keys (unlike `nox.json`, which rejects duplicates strictly).
+# Use core `Schema.validate_json` whenever duplicate-key rejection is security-critical.
+
+import nox.yyjson
+import nox.decimal
+import nox.bigint
+import schema
+import core
+import errors
+import models
+from nox.yyjson import YyValue, YyjsonError
+from nox.decimal import Decimal
+from nox.bigint import BigInt
+from schema import Schema, Field, UnionSchema, POLICY_FORBID, POLICY_IGNORE, POLICY_ALLOW, MODE_REQUIRED, MODE_REQUIRED_NULLABLE, MODE_OPTIONAL, MODE_OPTIONAL_NULLABLE, COERCION_LAX, _validate_string_value, _validate_decimal_value, _validate_bigint_value, _parse_decimal_str, _parse_bigint_str, _try_coerce_int, _try_coerce_float, _try_coerce_bool
+from core import ValidatedData, ValidationResult, Result, ValidationOutcome
+from errors import FieldError, CODE_INVALID_JSON, CODE_EXPECTED_OBJECT, CODE_MISSING_FIELD, CODE_UNEXPECTED_NULL, CODE_TYPE_MISMATCH, CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE, CODE_CHOICE_MISMATCH, CODE_ARRAY_TOO_SHORT, CODE_ARRAY_TOO_LONG, CODE_RECURSION_LIMIT, CODE_MAX_ERRORS_EXCEEDED
+from models import ModelSchema
+
+def yyjson_supported() -> bool:
+    return nox.yyjson.is_supported()
+
+def _describe_yy_kind(v: YyValue) -> str:
+    if nox.yyjson.is_null(v):
+        return "null"
+    if nox.yyjson.is_bool(v):
+        return "bool"
+    if nox.yyjson.is_integer(v):
+        return "int"
+    if nox.yyjson.is_number(v):
+        return "number"
+    if nox.yyjson.is_string(v):
+        return "string"
+    if nox.yyjson.is_array(v):
+        return "list"
+    if nox.yyjson.is_object(v):
+        return "object"
+    return "unknown"
+
+def _parse_yy_int(v: YyValue, safe53: bool, allow_lax: bool) -> int | None:
+    if nox.yyjson.is_number(v):
+        if not nox.yyjson.is_integer(v):
+            return None
+        iv: int | None = None
+        try:
+            iv = nox.yyjson.as_int(v)
+        except YyjsonError as e:
+            return None
+        if iv is not None and safe53:
+            if iv > 9007199254740991 or iv < -9007199254740991:
+                return None
+        return iv
+    elif allow_lax and nox.yyjson.is_string(v):
+        parsed: int | None = _try_coerce_int(nox.yyjson.as_string(v))
+        if parsed is not None and safe53:
+            if parsed > 9007199254740991 or parsed < -9007199254740991:
+                return None
+        return parsed
+    return None
+
+def _parse_yy_float(v: YyValue, allow_lax: bool) -> float | None:
+    if nox.yyjson.is_number(v):
+        raw_f: float = nox.yyjson.as_number(v)
+        s_num: str = str(raw_f)
+        if s_num == "nan" or s_num == "inf" or s_num == "-inf" or s_num == "NaN" or s_num == "Inf" or s_num == "-Inf":
+            return None
+        return raw_f
+    elif allow_lax and nox.yyjson.is_string(v):
+        return _try_coerce_float(nox.yyjson.as_string(v))
+    return None
+
+def _parse_yy_decimal(v: YyValue) -> Decimal | None:
+    if nox.yyjson.is_string(v):
+        return _parse_decimal_str(nox.yyjson.as_string(v))
+    if nox.yyjson.is_number(v):
+        txt: str = ""
+        try:
+            txt = nox.yyjson.number_text(v)
+        except YyjsonError as e:
+            return None
+        return _parse_decimal_str(txt)
+    return None
+
+def _parse_yy_bigint(v: YyValue) -> BigInt | None:
+    if nox.yyjson.is_string(v):
+        return _parse_bigint_str(nox.yyjson.as_string(v))
+    if nox.yyjson.is_integer(v):
+        txt: str = ""
+        try:
+            txt = nox.yyjson.number_text(v)
+        except YyjsonError as e:
+            return None
+        return _parse_bigint_str(txt)
+    return None
+
+def _validate_yy_union(u: UnionSchema, v: YyValue, prefix: str, depth: int) -> ValidationResult:
+    data: ValidatedData = ValidatedData()
+    err_list: list[FieldError] = []
+    root_path: str = prefix
+    if root_path == "":
+        root_path = "root"
+
+    if depth > u.max_depth:
+        err_list.append(FieldError(root_path, CODE_RECURSION_LIMIT, "Maximum nesting depth (" + str(u.max_depth) + ") exceeded", "depth <= " + str(u.max_depth), str(depth)))
+        return ValidationResult(False, data, err_list)
+
+    if not nox.yyjson.is_object(v):
+        err_list.append(FieldError(root_path, CODE_EXPECTED_OBJECT, "Expected JSON object for discriminated union '" + u.name + "'", "object", _describe_yy_kind(v)))
+        return ValidationResult(False, data, err_list)
+
+    tag_val: YyValue | None = nox.yyjson.get_or_none(v, u.discriminator)
+    d_path: str = u.discriminator
+    if prefix != "":
+        d_path = prefix + "." + u.discriminator
+
+    if tag_val is None:
+        err_list.append(FieldError(d_path, CODE_MISSING_FIELD, "Missing discriminator field '" + u.discriminator + "' for union '" + u.name + "'", "string", "missing"))
+        return ValidationResult(False, data, err_list)
+
+    if not nox.yyjson.is_string(tag_val):
+        err_list.append(FieldError(d_path, CODE_TYPE_MISMATCH, "Discriminator field '" + u.discriminator + "' must be a string", "string", _describe_yy_kind(tag_val)))
+        return ValidationResult(False, data, err_list)
+
+    tag: str = nox.yyjson.as_string(tag_val)
+    if tag not in u.variants:
+        err_list.append(FieldError(d_path, CODE_CHOICE_MISMATCH, "Unknown discriminator tag '" + tag + "' for union '" + u.name + "'", "known variant tag", tag))
+        return ValidationResult(False, data, err_list)
+
+    chosen: Schema = u.variants[tag]
+    if chosen.max_depth > u.max_depth:
+        chosen.max_depth = u.max_depth
+    res: ValidationResult = _validate_yy_at(chosen, v, prefix, depth, u.discriminator)
+    if res.is_valid:
+        res.data.set_str(u.discriminator, tag)
+    return res
+
+def _check_int_bounds_and_choices(field: Field, full_path: str, iv: int, err_list: list[FieldError]) -> None:
+    if field.has_min_int:
+        if field.is_exclusive_min:
+            if iv <= field.min_val_int:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val_int), "> " + str(field.min_val_int), str(iv)))
+        else:
+            if iv < field.min_val_int:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val_int), ">= " + str(field.min_val_int), str(iv)))
+    elif field.has_min:
+        if field.is_exclusive_min:
+            if float(iv) <= field.min_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val), "> " + str(field.min_val), str(iv)))
+        else:
+            if float(iv) < field.min_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(iv)))
+    if field.has_max_int:
+        if field.is_exclusive_max:
+            if iv >= field.max_val_int:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val_int), "< " + str(field.max_val_int), str(iv)))
+        else:
+            if iv > field.max_val_int:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val_int), "<= " + str(field.max_val_int), str(iv)))
+    elif field.has_max:
+        if field.is_exclusive_max:
+            if float(iv) >= field.max_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val), "< " + str(field.max_val), str(iv)))
+        else:
+            if float(iv) > field.max_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(iv)))
+    if len(field.choices_int) > 0:
+        matched_i: bool = False
+        cii: int = 0
+        while cii < len(field.choices_int):
+            if field.choices_int[cii] == iv:
+                matched_i = True
+            cii = cii + 1
+        if not matched_i:
+            err_list.append(FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed integer choices", "int choice", str(iv)))
+
+def _validate_yy_at(s: Schema, v: YyValue, prefix: str, depth: int, extra_allowed_key: str) -> ValidationResult:
+    data: ValidatedData = ValidatedData()
+    err_list: list[FieldError] = []
+
+    if depth > s.max_depth:
+        err_list.append(FieldError(prefix, CODE_RECURSION_LIMIT, "Maximum nesting depth (" + str(s.max_depth) + ") exceeded", "depth <= " + str(s.max_depth), str(depth)))
+        return ValidationResult(False, data, err_list)
+
+    if not nox.yyjson.is_object(v):
+        err_list.append(FieldError(prefix, CODE_EXPECTED_OBJECT, "Expected JSON object", "object", _describe_yy_kind(v)))
+        return ValidationResult(False, data, err_list)
+
+    # Build lookup map once per object
+    found_fields: dict[str, YyValue] = {}
+    obj_len: int = nox.yyjson.object_len(v)
+    ki: int = 0
+    while ki < obj_len:
+        k_str: str = nox.yyjson.object_key(v, ki)
+        k_val: YyValue = nox.yyjson.object_value(v, ki)
+        found_fields[k_str] = k_val
+
+        matched_f: Field | None = s.get_field(k_str)
+        if matched_f is None:
+            if len(extra_allowed_key) > 0 and k_str == extra_allowed_key:
+                pass
+            elif s.policy == POLICY_FORBID:
+                p_extra: str = k_str
+                if prefix != "":
+                    p_extra = prefix + "." + k_str
+                err_list.append(FieldError(p_extra, CODE_EXTRA_FIELD, "Unexpected unknown field: '" + p_extra + "'", "none", "present"))
+                if len(err_list) >= s.max_errors:
+                    err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED, "Error limit reached", str(s.max_errors), str(len(err_list))))
+                    return ValidationResult(False, data, err_list)
+            elif s.policy == POLICY_ALLOW:
+                try:
+                    data.set_extra(k_str, nox.yyjson.dump(k_val))
+                except YyjsonError as e:
+                    pass
+        ki = ki + 1
+
+    allow_lax: bool = (s.coercion == COERCION_LAX)
+    fi: int = 0
+    while fi < len(s.fields):
+        field: Field = s.fields[fi]
+        full_path: str = field.name
+        if prefix != "":
+            full_path = prefix + "." + field.name
+
+        lookup_key: str = field.name
+        if len(field.json_name) > 0:
+            lookup_key = field.json_name
+
+        field_val_opt: YyValue | None = None
+        if lookup_key in found_fields:
+            field_val_opt = found_fields[lookup_key]
+
+        if field_val_opt is None:
+            if field.has_default:
+                if field.kind == "string":
+                    data.set_str(field.name, field.default_str)
+                elif field.kind == "int":
+                    data.set_int(field.name, field.default_int)
+                elif field.kind == "float":
+                    data.set_float(field.name, field.default_float)
+                elif field.kind == "bool":
+                    data.set_bool(field.name, field.default_bool)
+                elif field.kind == "decimal":
+                    data.set_decimal(field.name, field.default_decimal)
+                elif field.kind == "bigint":
+                    data.set_bigint(field.name, field.default_bigint)
+            elif field.mode == MODE_REQUIRED or field.mode == MODE_REQUIRED_NULLABLE:
+                err_list.append(FieldError(full_path, CODE_MISSING_FIELD, "Missing required field: '" + full_path + "'", field.kind, "missing"))
+        else:
+            fv_yy: YyValue = field_val_opt
+            if nox.yyjson.is_null(fv_yy):
+                if field.mode == MODE_REQUIRED_NULLABLE or field.mode == MODE_OPTIONAL_NULLABLE:
+                    data.set_null(field.name)
+                else:
+                    err_list.append(FieldError(full_path, CODE_UNEXPECTED_NULL, "Field '" + full_path + "' cannot be null", "non-null " + field.kind, "null"))
+            else:
+                if field.kind == "string":
+                    sv_opt: str | None = None
+                    if nox.yyjson.is_string(fv_yy):
+                        sv_opt = nox.yyjson.as_string(fv_yy)
+                    elif allow_lax:
+                        if nox.yyjson.is_integer(fv_yy):
+                            lax_i_opt: int | None = _parse_yy_int(fv_yy, False, False)
+                            if lax_i_opt is not None:
+                                sv_opt = str(lax_i_opt)
+                        elif nox.yyjson.is_number(fv_yy):
+                            try:
+                                sv_opt = nox.yyjson.number_text(fv_yy)
+                            except YyjsonError as e:
+                                pass
+                        elif nox.yyjson.is_bool(fv_yy):
+                            if nox.yyjson.as_bool(fv_yy):
+                                sv_opt = "true"
+                            else:
+                                sv_opt = "false"
+                    if sv_opt is None:
+                        err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected string", "string", _describe_yy_kind(fv_yy)))
+                    else:
+                        sv: str = _validate_string_value(field, full_path, sv_opt, err_list)
+                        data.set_str(field.name, sv)
+
+                elif field.kind == "int":
+                    iv_opt: int | None = _parse_yy_int(fv_yy, field.is_safe_int53, allow_lax)
+                    if iv_opt is None:
+                        err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected integer", "int", _describe_yy_kind(fv_yy)))
+                    else:
+                        iv: int = iv_opt
+                        _check_int_bounds_and_choices(field, full_path, iv, err_list)
+                        data.set_int(field.name, iv)
+
+                elif field.kind == "float":
+                    fl_opt: float | None = _parse_yy_float(fv_yy, allow_lax)
+                    if fl_opt is None:
+                        err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected float", "float", _describe_yy_kind(fv_yy)))
+                    else:
+                        fl: float = fl_opt
+                        if field.has_min:
+                            if field.is_exclusive_min:
+                                if fl <= field.min_val:
+                                    err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val), "> " + str(field.min_val), str(fl)))
+                            else:
+                                if fl < field.min_val:
+                                    err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(fl)))
+                        if field.has_max:
+                            if field.is_exclusive_max:
+                                if fl >= field.max_val:
+                                    err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val), "< " + str(field.max_val), str(fl)))
+                            else:
+                                if fl > field.max_val:
+                                    err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(fl)))
+                        data.set_float(field.name, fl)
+
+                elif field.kind == "bool":
+                    bv_opt: bool | None = None
+                    if nox.yyjson.is_bool(fv_yy):
+                        bv_opt = nox.yyjson.as_bool(fv_yy)
+                    elif allow_lax and nox.yyjson.is_string(fv_yy):
+                        bv_opt = _try_coerce_bool(nox.yyjson.as_string(fv_yy))
+                    if bv_opt is None:
+                        err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected boolean", "bool", _describe_yy_kind(fv_yy)))
+                    else:
+                        data.set_bool(field.name, bv_opt)
+
+                elif field.kind == "decimal":
+                    dv_opt: Decimal | None = _parse_yy_decimal(fv_yy)
+                    if dv_opt is None:
+                        err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected decimal string or number", "decimal", _describe_yy_kind(fv_yy)))
+                    else:
+                        _validate_decimal_value(field, full_path, dv_opt, err_list)
+                        data.set_decimal(field.name, dv_opt)
+
+                elif field.kind == "bigint":
+                    bg_opt: BigInt | None = _parse_yy_bigint(fv_yy)
+                    if bg_opt is None:
+                        err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected bigint string or integer", "bigint", _describe_yy_kind(fv_yy)))
+                    else:
+                        _validate_bigint_value(field, full_path, bg_opt, err_list)
+                        data.set_bigint(field.name, bg_opt)
+
+                elif field.kind == "object":
+                    if not nox.yyjson.is_object(fv_yy):
+                        err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected object", "object", _describe_yy_kind(fv_yy)))
+                    else:
+                        sub: Schema | None = field.nested_schema
+                        if sub is not None:
+                            if sub.max_depth > s.max_depth:
+                                sub.max_depth = s.max_depth
+                            sub_res: ValidationResult = _validate_yy_at(sub, fv_yy, full_path, depth + 1, "")
+                            if not sub_res.is_valid:
+                                si: int = 0
+                                while si < len(sub_res.errors):
+                                    err_list.append(sub_res.errors[si])
+                                    si = si + 1
+                            else:
+                                data.set_object(field.name, sub_res.data)
+
+                elif field.kind == "union":
+                    u_sub: UnionSchema | None = field.union_schema
+                    if u_sub is not None:
+                        if u_sub.max_depth > s.max_depth:
+                            u_sub.max_depth = s.max_depth
+                        u_res: ValidationResult = _validate_yy_union(u_sub, fv_yy, full_path, depth + 1)
+                        if not u_res.is_valid:
+                            ui: int = 0
+                            while ui < len(u_res.errors):
+                                err_list.append(u_res.errors[ui])
+                                ui = ui + 1
+                        else:
+                            data.set_object(field.name, u_res.data)
+
+                elif field.kind == "list":
+                    if not nox.yyjson.is_array(fv_yy):
+                        err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected array", "list", _describe_yy_kind(fv_yy)))
+                    else:
+                        alen: int = nox.yyjson.array_len(fv_yy)
+                        if field.has_min_items and alen < field.min_items:
+                            err_list.append(FieldError(full_path, CODE_ARRAY_TOO_SHORT, "Array '" + full_path + "' must contain at least " + str(field.min_items) + " items", "length >= " + str(field.min_items), str(alen)))
+                        if field.has_max_items and alen > field.max_items:
+                            err_list.append(FieldError(full_path, CODE_ARRAY_TOO_LONG, "Array '" + full_path + "' must contain at most " + str(field.max_items) + " items", "length <= " + str(field.max_items), str(alen)))
+
+                        if field.item_kind == "string":
+                            s_items: list[str] = []
+                            ai: int = 0
+                            while ai < alen:
+                                el: YyValue = nox.yyjson.array_get(fv_yy, ai)
+                                el_path: str = full_path + "[" + str(ai) + "]"
+                                if not nox.yyjson.is_string(el):
+                                    err_list.append(FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected string", "string", _describe_yy_kind(el)))
+                                else:
+                                    s_items.append(nox.yyjson.as_string(el))
+                                ai = ai + 1
+                            data.set_list_str(field.name, s_items)
+
+                        elif field.item_kind == "int":
+                            i_items: list[int] = []
+                            ai: int = 0
+                            while ai < alen:
+                                el: YyValue = nox.yyjson.array_get(fv_yy, ai)
+                                el_path: str = full_path + "[" + str(ai) + "]"
+                                el_int: int | None = _parse_yy_int(el, field.is_safe_int53, False)
+                                if el_int is None:
+                                    err_list.append(FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected integer", "int", _describe_yy_kind(el)))
+                                else:
+                                    i_items.append(el_int)
+                                ai = ai + 1
+                            data.set_list_int(field.name, i_items)
+
+                        elif field.item_kind == "float":
+                            f_items: list[float] = []
+                            ai: int = 0
+                            while ai < alen:
+                                el: YyValue = nox.yyjson.array_get(fv_yy, ai)
+                                el_path: str = full_path + "[" + str(ai) + "]"
+                                el_flt: float | None = _parse_yy_float(el, False)
+                                if el_flt is None:
+                                    err_list.append(FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected float", "float", _describe_yy_kind(el)))
+                                else:
+                                    f_items.append(el_flt)
+                                ai = ai + 1
+                            data.set_list_float(field.name, f_items)
+
+                        elif field.item_kind == "bool":
+                            b_items: list[bool] = []
+                            ai: int = 0
+                            while ai < alen:
+                                el: YyValue = nox.yyjson.array_get(fv_yy, ai)
+                                el_path: str = full_path + "[" + str(ai) + "]"
+                                if not nox.yyjson.is_bool(el):
+                                    err_list.append(FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected boolean", "bool", _describe_yy_kind(el)))
+                                else:
+                                    b_items.append(nox.yyjson.as_bool(el))
+                                ai = ai + 1
+                            data.set_list_bool(field.name, b_items)
+
+                        elif field.item_kind == "object":
+                            o_items: list[ValidatedData] = []
+                            item_sub: Schema | None = field.item_schema
+                            ai: int = 0
+                            while ai < alen:
+                                el: YyValue = nox.yyjson.array_get(fv_yy, ai)
+                                el_path: str = full_path + "[" + str(ai) + "]"
+                                if not nox.yyjson.is_object(el):
+                                    err_list.append(FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected object", "object", _describe_yy_kind(el)))
+                                else:
+                                    if item_sub is not None:
+                                        if item_sub.max_depth > s.max_depth:
+                                            item_sub.max_depth = s.max_depth
+                                        el_res: ValidationResult = _validate_yy_at(item_sub, el, el_path, depth + 1, "")
+                                        if not el_res.is_valid:
+                                            ei: int = 0
+                                            while ei < len(el_res.errors):
+                                                err_list.append(el_res.errors[ei])
+                                                ei = ei + 1
+                                        else:
+                                            o_items.append(el_res.data)
+                                ai = ai + 1
+                            data.set_list_object(field.name, o_items)
+
+                        elif field.item_kind == "union":
+                            u_items: list[ValidatedData] = []
+                            item_u: UnionSchema | None = field.item_union
+                            ai: int = 0
+                            while ai < alen:
+                                el: YyValue = nox.yyjson.array_get(fv_yy, ai)
+                                el_path: str = full_path + "[" + str(ai) + "]"
+                                if item_u is not None:
+                                    if item_u.max_depth > s.max_depth:
+                                        item_u.max_depth = s.max_depth
+                                    eu_res: ValidationResult = _validate_yy_union(item_u, el, el_path, depth + 1)
+                                    if not eu_res.is_valid:
+                                        eui: int = 0
+                                        while eui < len(eu_res.errors):
+                                            err_list.append(eu_res.errors[eui])
+                                            eui = eui + 1
+                                    else:
+                                        u_items.append(eu_res.data)
+                                ai = ai + 1
+                            data.set_list_object(field.name, u_items)
+
+        if len(err_list) >= s.max_errors:
+            err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED, "Error limit reached", str(s.max_errors), str(len(err_list))))
+            return ValidationResult(False, data, err_list)
+
+        fi = fi + 1
+
+    if len(err_list) == 0 and len(s.custom_validators) > 0:
+        cvi: int = 0
+        while cvi < len(s.custom_validators):
+            cv: (ValidatedData) -> list[FieldError] = s.custom_validators[cvi]
+            c_errs: list[FieldError] = cv(data)
+            ci: int = 0
+            while ci < len(c_errs):
+                err_list.append(c_errs[ci])
+                ci = ci + 1
+            cvi = cvi + 1
+
+    return ValidationResult(len(err_list) == 0, data, err_list)
+
+def _validate_yy_mode(s: Schema, json_str: str, mode: int) -> ValidationResult:
+    try:
+        v: YyValue = nox.yyjson.open_doc(json_str, mode)
+        return _validate_yy_at(s, v, "", 0, "")
+    except YyjsonError as e:
+        d: ValidatedData = ValidatedData()
+        errs: list[FieldError] = []
+        errs.append(FieldError("root", CODE_INVALID_JSON, "Malformed JSON syntax (yyjson): " + e.message, "valid JSON", "syntax error"))
+        return ValidationResult(False, d, errs)
+
+# Strict RFC 8259 JSON parsing via zero-copy yyjson C tree.
+def validate_yyjson(s: Schema, json_str: str) -> ValidationResult:
+    return _validate_yy_mode(s, json_str, 0)
+
+# Relaxed JSON (// and /* */ comments + trailing commas) via yyjson.
+def validate_yyjson_relaxed(s: Schema, json_str: str) -> ValidationResult:
+    return _validate_yy_mode(s, json_str, 1)
+
+# JSON5 (single quotes, unquoted keys, hex literals, trailing commas, comments) via yyjson.
+def validate_yyjson5(s: Schema, json_str: str) -> ValidationResult:
+    return _validate_yy_mode(s, json_str, 2)
+
+class YyjsonModel[T]:
+    model: ModelSchema[T]
+
+    def __init__(self, model: ModelSchema[T]) -> None:
+        self.model = model
+
+    def parse(self, json_str: str) -> Result[T]:
+        vr: ValidationResult = validate_yyjson(self.model.schema, json_str)
+        if vr.is_valid:
+            fn: (ValidatedData) -> T = self.model.factory
+            return Result[T](True, fn(vr.data), [])
+        return Result[T](False, None, vr.errors)
+
+    def parse_relaxed(self, json_str: str) -> Result[T]:
+        vr: ValidationResult = validate_yyjson_relaxed(self.model.schema, json_str)
+        if vr.is_valid:
+            fn: (ValidatedData) -> T = self.model.factory
+            return Result[T](True, fn(vr.data), [])
+        return Result[T](False, None, vr.errors)
+
+    def parse_json5(self, json_str: str) -> Result[T]:
+        vr: ValidationResult = validate_yyjson5(self.model.schema, json_str)
+        if vr.is_valid:
+            fn: (ValidatedData) -> T = self.model.factory
+            return Result[T](True, fn(vr.data), [])
+        return Result[T](False, None, vr.errors)
+
+    def parse_outcome(self, json_str: str) -> ValidationOutcome[T]:
+        return self.parse(json_str).to_outcome()
+
+    def parse_outcome_relaxed(self, json_str: str) -> ValidationOutcome[T]:
+        return self.parse_relaxed(json_str).to_outcome()
+
+    def parse_outcome_json5(self, json_str: str) -> ValidationOutcome[T]:
+        return self.parse_json5(json_str).to_outcome()

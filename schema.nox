@@ -2,7 +2,7 @@
 
 import nox.reflect
 import errors
-from errors import FieldError, CODE_INVALID_JSON, CODE_EXPECTED_OBJECT, CODE_MISSING_FIELD, CODE_UNEXPECTED_NULL, CODE_TYPE_MISMATCH, CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE, CODE_STRING_TOO_SHORT, CODE_STRING_TOO_LONG, CODE_INVALID_EMAIL, CODE_INVALID_URL, CODE_INVALID_UUID, CODE_INVALID_DATE, CODE_INVALID_TIME, CODE_INVALID_DATETIME, CODE_PATTERN_MISMATCH, CODE_CHOICE_MISMATCH, CODE_ARRAY_TOO_SHORT, CODE_ARRAY_TOO_LONG, CODE_RECURSION_LIMIT, CODE_MAX_ERRORS_EXCEEDED, CODE_INVALID_TOML, CODE_INVALID_YAML
+from errors import FieldError, CODE_INVALID_JSON, CODE_EXPECTED_OBJECT, CODE_MISSING_FIELD, CODE_UNEXPECTED_NULL, CODE_TYPE_MISMATCH, CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE, CODE_STRING_TOO_SHORT, CODE_STRING_TOO_LONG, CODE_INVALID_EMAIL, CODE_INVALID_URL, CODE_INVALID_UUID, CODE_INVALID_DATE, CODE_INVALID_TIME, CODE_INVALID_DATETIME, CODE_INVALID_TIMEZONE, CODE_PATTERN_MISMATCH, CODE_CHOICE_MISMATCH, CODE_ARRAY_TOO_SHORT, CODE_ARRAY_TOO_LONG, CODE_RECURSION_LIMIT, CODE_MAX_ERRORS_EXCEEDED, CODE_INVALID_TOML, CODE_INVALID_YAML
 import validators
 import core
 from core import ValidatedData, ValidationResult
@@ -12,11 +12,16 @@ import nox.json
 import nox.regex
 from nox.regex import RegexError
 import nox.strings
+import nox.unicode
 import nox.db
 import nox.toml
 from nox.toml import TomlValue, TomlError
 import nox.yaml
 from nox.yaml import YamlValue, YamlError
+import nox.decimal
+from nox.decimal import Decimal, DecimalError
+import nox.bigint
+from nox.bigint import BigInt, BigIntError
 from nox.db import Row
 from nox.json import JsonError, JsonWriter
 
@@ -58,6 +63,159 @@ def _object_lookup(v: JsonValue, key: str) -> JsonValue | None:
             return nox.json.object_value(v, i)
         i = i + 1
     return None
+
+def _parse_json_int(v: JsonValue, safe53: bool, allow_lax: bool) -> int | None:
+    if nox.json.is_number(v):
+        if safe53:
+            nv: float = nox.json.as_number(v)
+            if validators.is_valid_int(nv):
+                return int(nv)
+            return None
+        try:
+            return nox.json.as_int(v)
+        except JsonError as e:
+            return None
+    if allow_lax and nox.json.is_string(v):
+        iv_lax: int | None = _try_coerce_int(nox.json.as_string(v))
+        if iv_lax is not None and safe53:
+            if iv_lax > 9007199254740991 or iv_lax < -9007199254740991:
+                return None
+        return iv_lax
+    return None
+
+def _has_ascii_digit(s: str) -> bool:
+    i: int = 0
+    n: int = nox.strings.byte_len(s)
+    while i < n:
+        b: int = nox.strings.byte_at(s, i)
+        if b >= 48 and b <= 57:
+            return True
+        i = i + 1
+    return False
+
+def _parse_decimal_str(raw: str) -> Decimal | None:
+    if len(raw) == 0 or nox.strings.trim(raw) != raw:
+        return None
+    if not _has_ascii_digit(raw):
+        return None
+    if nox.strings.contains(raw, "_"):
+        return None
+    try:
+        return nox.decimal.parse(raw)
+    except ValueError as e:
+        return None
+    except BigIntError as e:
+        return None
+    except DecimalError as e:
+        return None
+
+def _parse_json_decimal(v: JsonValue) -> Decimal | None:
+    if nox.json.is_string(v):
+        return _parse_decimal_str(nox.json.as_string(v))
+    if nox.json.is_number(v):
+        return _parse_decimal_str(nox.json.number_text(v))
+    return None
+
+def _parse_bigint_str(raw: str) -> BigInt | None:
+    n: int = nox.strings.byte_len(raw)
+    if n == 0 or nox.strings.trim(raw) != raw:
+        return None
+    i: int = 0
+    b0: int = nox.strings.byte_at(raw, 0)
+    if b0 == 45 or b0 == 43:
+        i = 1
+    if i >= n:
+        return None
+    while i < n:
+        b: int = nox.strings.byte_at(raw, i)
+        if b < 48 or b > 57:
+            return None
+        i = i + 1
+    try:
+        return nox.bigint.parse(raw)
+    except ValueError as e:
+        return None
+    except BigIntError as e:
+        return None
+
+def _parse_json_bigint(v: JsonValue) -> BigInt | None:
+    if nox.json.is_string(v):
+        return _parse_bigint_str(nox.json.as_string(v))
+    if nox.json.is_number(v):
+        txt: str = nox.json.number_text(v)
+        direct: BigInt | None = _parse_bigint_str(txt)
+        if direct is not None:
+            return direct
+        dec_v: Decimal | None = _parse_decimal_str(txt)
+        if dec_v is not None:
+            norm: Decimal = dec_v.normalize()
+            if norm.exp >= 0:
+                return norm.to_bigint()
+        return None
+    return None
+
+def _decimal_places_count(d: Decimal) -> int:
+    norm: Decimal = d.normalize()
+    if norm.is_zero() or norm.exp >= 0:
+        return 0
+    return -norm.exp
+
+def _decimal_total_digits(d: Decimal) -> int:
+    norm: Decimal = d.normalize()
+    if norm.is_zero():
+        return 1
+    c_len: int = len(norm.coef.abs().to_str())
+    if norm.exp >= 0:
+        return c_len + norm.exp
+    if -norm.exp > c_len:
+        return -norm.exp
+    return c_len
+
+def _validate_decimal_value(field: Field, full_path: str, dv: Decimal, err_list: list[FieldError]) -> None:
+    actual_repr: str = str(dv)
+    if field.is_secret:
+        actual_repr = "[REDACTED]"
+    if field.has_min_dec:
+        if field.is_exclusive_min:
+            if dv <= field.min_dec_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_dec_val), "> " + str(field.min_dec_val), actual_repr))
+        else:
+            if dv < field.min_dec_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_dec_val), ">= " + str(field.min_dec_val), actual_repr))
+    if field.has_max_dec:
+        if field.is_exclusive_max:
+            if dv >= field.max_dec_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_dec_val), "< " + str(field.max_dec_val), actual_repr))
+        else:
+            if dv > field.max_dec_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_dec_val), "<= " + str(field.max_dec_val), actual_repr))
+    if field.has_decimal_places:
+        places: int = _decimal_places_count(dv)
+        if places > field.max_dec_places:
+            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' exceeds maximum decimal places (" + str(field.max_dec_places) + ")", "decimal_places <= " + str(field.max_dec_places), str(places)))
+    if field.has_max_digits:
+        digits: int = _decimal_total_digits(dv)
+        if digits > field.max_dec_digits:
+            err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' exceeds maximum total digits (" + str(field.max_dec_digits) + ")", "max_digits <= " + str(field.max_dec_digits), str(digits)))
+
+def _validate_bigint_value(field: Field, full_path: str, bv: BigInt, err_list: list[FieldError]) -> None:
+    actual_repr: str = bv.to_str()
+    if field.is_secret:
+        actual_repr = "[REDACTED]"
+    if field.has_min_big:
+        if field.is_exclusive_min:
+            if bv <= field.min_big_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + field.min_big_val.to_str(), "> " + field.min_big_val.to_str(), actual_repr))
+        else:
+            if bv < field.min_big_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + field.min_big_val.to_str(), ">= " + field.min_big_val.to_str(), actual_repr))
+    if field.has_max_big:
+        if field.is_exclusive_max:
+            if bv >= field.max_big_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + field.max_big_val.to_str(), "< " + field.max_big_val.to_str(), actual_repr))
+        else:
+            if bv > field.max_big_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + field.max_big_val.to_str(), "<= " + field.max_big_val.to_str(), actual_repr))
 
 def _toml_to_json(v: TomlValue) -> str:
     if nox.toml.is_string(v) or nox.toml.is_datetime(v):
@@ -189,11 +347,31 @@ class Field:
     choices_int: list[int]
     nested_schema: Schema | None
     item_schema: Schema | None
+    union_schema: UnionSchema | None
+    item_union: UnionSchema | None
     description: str
     is_secret: bool
     is_date: bool
     is_time: bool
     is_datetime: bool
+    is_safe_int53: bool
+    do_strip: bool
+    case_mode: str
+    unicode_form: str
+    default_decimal: Decimal
+    default_bigint: BigInt
+    has_min_dec: bool
+    min_dec_val: Decimal
+    has_max_dec: bool
+    max_dec_val: Decimal
+    has_decimal_places: bool
+    max_dec_places: int
+    has_max_digits: bool
+    max_dec_digits: int
+    has_min_big: bool
+    min_big_val: BigInt
+    has_max_big: bool
+    max_big_val: BigInt
 
     def __init__(self: Field, name: str, kind: str) -> None:
         self.name = name
@@ -230,11 +408,31 @@ class Field:
         self.choices_int = []
         self.nested_schema = None
         self.item_schema = None
+        self.union_schema = None
+        self.item_union = None
         self.description = ""
         self.is_secret = False
         self.is_date = False
         self.is_time = False
         self.is_datetime = False
+        self.is_safe_int53 = False
+        self.do_strip = False
+        self.case_mode = ""
+        self.unicode_form = ""
+        self.default_decimal = nox.decimal.from_int(0)
+        self.default_bigint = nox.bigint.from_int(0)
+        self.has_min_dec = False
+        self.min_dec_val = nox.decimal.from_int(0)
+        self.has_max_dec = False
+        self.max_dec_val = nox.decimal.from_int(0)
+        self.has_decimal_places = False
+        self.max_dec_places = 0
+        self.has_max_digits = False
+        self.max_dec_digits = 0
+        self.has_min_big = False
+        self.min_big_val = nox.bigint.from_int(0)
+        self.has_max_big = False
+        self.max_big_val = nox.bigint.from_int(0)
 
     def alias(self: Field, json_key: str) -> Field:
         self.json_name = json_key
@@ -399,6 +597,40 @@ class Field:
         self.fmt = "uuid"
         return self
 
+    def uuid7(self: Field) -> Field:
+        self.fmt = "uuid7"
+        return self
+
+    def timezone(self: Field) -> Field:
+        self.fmt = "timezone"
+        return self
+
+    def strip(self: Field) -> Field:
+        self.do_strip = True
+        return self
+
+    def to_lower(self: Field) -> Field:
+        self.case_mode = "lower"
+        return self
+
+    def to_upper(self: Field) -> Field:
+        self.case_mode = "upper"
+        return self
+
+    def lower_tr(self: Field) -> Field:
+        self.case_mode = "lower_tr"
+        return self
+
+    def upper_tr(self: Field) -> Field:
+        self.case_mode = "upper_tr"
+        return self
+
+    def unicode_normalize(self: Field, form: str = "NFC") -> Field:
+        if form != "NFC" and form != "NFD" and form != "NFKC" and form != "NFKD":
+            raise ValueError("Unsupported Unicode normalization form '" + form + "' (expected NFC, NFD, NFKC, or NFKD)")
+        self.unicode_form = form
+        return self
+
     def date(self: Field) -> Field:
         self.is_date = True
         self.fmt = "date"
@@ -422,6 +654,171 @@ class Field:
         self.description = desc
         return self
 
+    def safe_int53(self: Field) -> Field:
+        self.is_safe_int53 = True
+        return self
+
+    def default_dec(self: Field, v: Decimal) -> Field:
+        self.has_default = True
+        self.default_decimal = v
+        self.optional()
+        return self
+
+    def default_big(self: Field, v: BigInt) -> Field:
+        self.has_default = True
+        self.default_bigint = v
+        self.optional()
+        return self
+
+    def min_dec(self: Field, v: Decimal) -> Field:
+        self.has_min_dec = True
+        self.min_dec_val = v
+        self.is_exclusive_min = False
+        return self
+
+    def ge_dec(self: Field, v: Decimal) -> Field:
+        return self.min_dec(v)
+
+    def gt_dec(self: Field, v: Decimal) -> Field:
+        self.has_min_dec = True
+        self.min_dec_val = v
+        self.is_exclusive_min = True
+        return self
+
+    def max_dec(self: Field, v: Decimal) -> Field:
+        self.has_max_dec = True
+        self.max_dec_val = v
+        self.is_exclusive_max = False
+        return self
+
+    def le_dec(self: Field, v: Decimal) -> Field:
+        return self.max_dec(v)
+
+    def lt_dec(self: Field, v: Decimal) -> Field:
+        self.has_max_dec = True
+        self.max_dec_val = v
+        self.is_exclusive_max = True
+        return self
+
+    def decimal_places(self: Field, n: int) -> Field:
+        self.has_decimal_places = True
+        self.max_dec_places = n
+        return self
+
+    def max_digits(self: Field, n: int) -> Field:
+        self.has_max_digits = True
+        self.max_dec_digits = n
+        return self
+
+    def min_big(self: Field, v: BigInt) -> Field:
+        self.has_min_big = True
+        self.min_big_val = v
+        self.is_exclusive_min = False
+        return self
+
+    def ge_big(self: Field, v: BigInt) -> Field:
+        return self.min_big(v)
+
+    def gt_big(self: Field, v: BigInt) -> Field:
+        self.has_min_big = True
+        self.min_big_val = v
+        self.is_exclusive_min = True
+        return self
+
+    def max_big(self: Field, v: BigInt) -> Field:
+        self.has_max_big = True
+        self.max_big_val = v
+        self.is_exclusive_max = False
+        return self
+
+    def le_big(self: Field, v: BigInt) -> Field:
+        return self.max_big(v)
+
+    def lt_big(self: Field, v: BigInt) -> Field:
+        self.has_max_big = True
+        self.max_big_val = v
+        self.is_exclusive_max = True
+        return self
+
+def _normalize_string_field(field: Field, sv: str) -> str:
+    out: str = sv
+    if len(field.unicode_form) > 0:
+        out = nox.unicode.normalize(out, field.unicode_form)
+    if field.do_strip:
+        out = nox.strings.trim(out)
+    if field.case_mode == "lower":
+        out = nox.strings.lower(out)
+    elif field.case_mode == "upper":
+        out = nox.strings.upper(out)
+    elif field.case_mode == "lower_tr":
+        out = nox.unicode.lower_tr(out)
+    elif field.case_mode == "upper_tr":
+        out = nox.unicode.upper_tr(out)
+    return out
+
+def _validate_string_value(field: Field, full_path: str, raw_sv: str, err_list: list[FieldError]) -> str:
+    sv: str = _normalize_string_field(field, raw_sv)
+    actual_repr: str = sv
+    if field.is_secret:
+        actual_repr = "[REDACTED]"
+
+    if field.has_min_len and len(sv) < field.min_len:
+        err_list.append(
+            FieldError(full_path, CODE_STRING_TOO_SHORT, "Field '" + full_path + "' must have at least " + str(field.min_len) + " characters", "length >= " + str(field.min_len), str(len(sv)))
+        )
+    if field.has_max_len and len(sv) > field.max_len:
+        err_list.append(
+            FieldError(full_path, CODE_STRING_TOO_LONG, "Field '" + full_path + "' must have at most " + str(field.max_len) + " characters", "length <= " + str(field.max_len), str(len(sv)))
+        )
+    if len(field.choices) > 0:
+        matched_choice: bool = False
+        ci: int = 0
+        while ci < len(field.choices):
+            if field.choices[ci] == sv:
+                matched_choice = True
+            ci = ci + 1
+        if not matched_choice:
+            err_list.append(
+                FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed choices", "choice", actual_repr)
+            )
+    if len(field.pattern) > 0 and not nox.regex.is_full_match(field.pattern, sv):
+        err_list.append(
+            FieldError(full_path, CODE_PATTERN_MISMATCH, "Field '" + full_path + "' does not match pattern: " + field.pattern, field.pattern, actual_repr)
+        )
+    if field.fmt == "email" and not validators.is_valid_email(sv):
+        err_list.append(
+            FieldError(full_path, CODE_INVALID_EMAIL, "Field '" + full_path + "' is not a valid email address", "email", actual_repr)
+        )
+    if field.fmt == "url" and not validators.is_valid_url(sv):
+        err_list.append(
+            FieldError(full_path, CODE_INVALID_URL, "Field '" + full_path + "' is not a valid absolute URL", "url", actual_repr)
+        )
+    if field.fmt == "uuid" and not validators.is_valid_uuid(sv):
+        err_list.append(
+            FieldError(full_path, CODE_INVALID_UUID, "Field '" + full_path + "' is not a valid UUID", "uuid", actual_repr)
+        )
+    if field.fmt == "uuid7" and not validators.is_valid_uuid7(sv):
+        err_list.append(
+            FieldError(full_path, CODE_INVALID_UUID, "Field '" + full_path + "' is not a valid UUIDv7", "uuid7", actual_repr)
+        )
+    if field.fmt == "date" and not validators.is_valid_date(sv):
+        err_list.append(
+            FieldError(full_path, CODE_INVALID_DATE, "Field '" + full_path + "' is not a valid ISO 8601 date (YYYY-MM-DD)", "date", actual_repr)
+        )
+    if field.fmt == "time" and not validators.is_valid_time(sv):
+        err_list.append(
+            FieldError(full_path, CODE_INVALID_TIME, "Field '" + full_path + "' is not a valid ISO 8601 time (HH:MM:SS)", "time", actual_repr)
+        )
+    if field.fmt == "date-time" and not validators.is_valid_datetime(sv):
+        err_list.append(
+            FieldError(full_path, CODE_INVALID_DATETIME, "Field '" + full_path + "' is not a valid ISO 8601 datetime", "date-time", actual_repr)
+        )
+    if field.fmt == "timezone" and not validators.is_valid_timezone(sv):
+        err_list.append(
+            FieldError(full_path, CODE_INVALID_TIMEZONE, "Field '" + full_path + "' is not a valid IANA timezone", "timezone", actual_repr)
+        )
+    return sv
+
 def _is_in_derivation_stack(stack: list[str], name: str) -> bool:
     i: int = 0
     while i < len(stack):
@@ -437,6 +834,32 @@ def _copy_derivation_stack(stack: list[str]) -> list[str]:
         res.append(stack[i])
         i = i + 1
     return res
+
+def _strip_module_prefix(name: str) -> str:
+    idx: int = nox.strings.index_of(name, ".")
+    if idx < 0:
+        return name
+    cur: str = name
+    while nox.strings.index_of(cur, ".") >= 0:
+        dot: int = nox.strings.index_of(cur, ".")
+        cur = cur[dot + 1:len(cur)]
+    return cur
+
+def _normalize_reflect_primitive(name: str) -> str:
+    stripped: str = _strip_module_prefix(name)
+    if stripped == "nox_decimal_Decimal":
+        return "Decimal"
+    if stripped == "nox_bigint_BigInt":
+        return "BigInt"
+    return stripped
+
+def _resolve_reflect_class_name(raw_name: str) -> str:
+    if nox.reflect.class_index(raw_name) >= 0:
+        return raw_name
+    short_name: str = _strip_module_prefix(raw_name)
+    if nox.reflect.class_index(short_name) >= 0:
+        return short_name
+    return raw_name
 
 class Schema:
     name: str
@@ -491,6 +914,14 @@ class Schema:
         f: Field = Field(name, "bool")
         return self._add_field(f)
 
+    def field_decimal(self: Schema, name: str) -> Field:
+        f: Field = Field(name, "decimal")
+        return self._add_field(f)
+
+    def field_bigint(self: Schema, name: str) -> Field:
+        f: Field = Field(name, "bigint")
+        return self._add_field(f)
+
     def field_object(self: Schema, name: str, sub: Schema) -> Field:
         f: Field = Field(name, "object")
         f.nested_schema = sub
@@ -505,6 +936,23 @@ class Schema:
         f: Field = Field(name, "list")
         f.item_kind = "object"
         f.item_schema = sub
+        return self._add_field(f)
+
+    def field_union(self: Schema, name: str, u: UnionSchema) -> Field:
+        f: Field = Field(name, "union")
+        f.union_schema = u
+        return self._add_field(f)
+
+    def field_union_map(self: Schema, name: str, discriminator: str, variants: dict[str, Schema]) -> Field:
+        u: UnionSchema = UnionSchema(self.name + "_" + name, discriminator)
+        for tag in variants.keys():
+            u.variant(tag, variants[tag])
+        return self.field_union(name, u)
+
+    def field_list_union(self: Schema, name: str, u: UnionSchema) -> Field:
+        f: Field = Field(name, "list")
+        f.item_kind = "union"
+        f.item_union = u
         return self._add_field(f)
 
     def get_field(self: Schema, name: str) -> Field | None:
@@ -543,7 +991,16 @@ class Schema:
         k: int = 0
         while k < p_count:
             p_name: str = nox.reflect.class_init_param_name(idx, k)
-            p_type: str = nox.reflect.class_init_param_type(idx, k)
+            raw_p_type: str = nox.reflect.class_init_param_type(idx, k)
+            p_type: str = raw_p_type
+            if nox.strings.ends_with(p_type, " | None"):
+                base_opt: str = _normalize_reflect_primitive(p_type[0:len(p_type) - 7])
+                if base_opt == "str" or base_opt == "int" or base_opt == "float" or base_opt == "bool" or base_opt == "Decimal" or base_opt == "BigInt":
+                    p_type = base_opt + " | None"
+            else:
+                base_plain: str = _normalize_reflect_primitive(p_type)
+                if base_plain == "Decimal" or base_plain == "BigInt":
+                    p_type = base_plain
             handled: bool = False
 
             if p_type == "str":
@@ -570,6 +1027,18 @@ class Schema:
             elif p_type == "bool | None":
                 self.field_bool(p_name).optional().nullable()
                 handled = True
+            elif p_type == "Decimal":
+                self.field_decimal(p_name)
+                handled = True
+            elif p_type == "Decimal | None":
+                self.field_decimal(p_name).optional().nullable()
+                handled = True
+            elif p_type == "BigInt":
+                self.field_bigint(p_name)
+                handled = True
+            elif p_type == "BigInt | None":
+                self.field_bigint(p_name).optional().nullable()
+                handled = True
             elif p_type == "list[str]":
                 self.field_list(p_name, "string")
                 handled = True
@@ -584,20 +1053,21 @@ class Schema:
                 handled = True
             else:
                 if len(p_type) > 7 and p_type[len(p_type) - 7:len(p_type)] == " | None":
-                    inner_cls_opt: str = p_type[0:len(p_type) - 7]
+                    inner_cls_opt: str = _resolve_reflect_class_name(p_type[0:len(p_type) - 7])
                     opt_sub_idx: int = nox.reflect.class_index(inner_cls_opt)
                     if opt_sub_idx >= 0:
                         sub_opt_s: Schema = auto_schema_internal(inner_cls_opt, curr_stack)
                         self.field_object(p_name, sub_opt_s).optional().nullable()
                         handled = True
                 else:
-                    sub_idx: int = nox.reflect.class_index(p_type)
+                    resolved_sub: str = _resolve_reflect_class_name(p_type)
+                    sub_idx: int = nox.reflect.class_index(resolved_sub)
                     if sub_idx >= 0:
-                        sub_s: Schema = auto_schema_internal(p_type, curr_stack)
+                        sub_s: Schema = auto_schema_internal(resolved_sub, curr_stack)
                         self.field_object(p_name, sub_s)
                         handled = True
                     elif len(p_type) > 5 and p_type[0:5] == "list[":
-                        inner_cls: str = p_type[5:len(p_type) - 1]
+                        inner_cls: str = _resolve_reflect_class_name(p_type[5:len(p_type) - 1])
                         sub_arr_idx: int = nox.reflect.class_index(inner_cls)
                         if sub_arr_idx >= 0:
                             sub_arr_s: Schema = auto_schema_internal(inner_cls, curr_stack)
@@ -608,9 +1078,209 @@ class Schema:
                 raise ValueError("Unsupported or unrecognized field type '" + p_type + "' for parameter '" + p_name + "' in class '" + class_name + "'")
 
             k = k + 1
+
+        self._apply_class_decorators(class_name)
         return self
 
+    def _apply_class_decorators(self: Schema, class_name: str) -> None:
+        short_target: str = _strip_module_prefix(class_name)
+        d_count: int = nox.reflect.decorator_count()
+        di: int = 0
+        while di < d_count:
+            if nox.reflect.decorator_kind(di) == 1:
+                tname: str = nox.reflect.decorator_target_name(di)
+                if tname == class_name or _strip_module_prefix(tname) == short_target:
+                    dname: str = nox.reflect.decorator_name(di)
+                    ac: int = nox.reflect.decorator_arg_count(di)
+                    if dname == "schema_policy" and ac >= 1:
+                        pol_s: str = nox.reflect.decorator_arg(di, 0)
+                        if pol_s == "forbid":
+                            self.set_policy(POLICY_FORBID)
+                        elif pol_s == "ignore":
+                            self.set_policy(POLICY_IGNORE)
+                        elif pol_s == "allow":
+                            self.set_policy(POLICY_ALLOW)
+                        else:
+                            raise ValueError("Invalid @schema_policy('" + pol_s + "') on class '" + class_name + "'")
+                    elif dname == "schema_coercion" and ac >= 1:
+                        co_s: str = nox.reflect.decorator_arg(di, 0)
+                        if co_s == "strict":
+                            self.set_coercion(COERCION_STRICT)
+                        elif co_s == "lax":
+                            self.set_coercion(COERCION_LAX)
+                        else:
+                            raise ValueError("Invalid @schema_coercion('" + co_s + "') on class '" + class_name + "'")
+                    elif dname == "schema_max_depth" and ac >= 1:
+                        self.set_max_depth(nox.reflect.decorator_arg_int(di, 0))
+                    elif dname == "schema_max_errors" and ac >= 1:
+                        self.set_max_errors(nox.reflect.decorator_arg_int(di, 0))
+                    elif dname == "field_alias" and ac >= 2:
+                        self.require_field(nox.reflect.decorator_arg(di, 0)).alias(nox.reflect.decorator_arg(di, 1))
+                    elif dname == "field_secret" and ac >= 1:
+                        self.require_field(nox.reflect.decorator_arg(di, 0)).secret()
+                    elif dname == "field_describe" and ac >= 2:
+                        self.require_field(nox.reflect.decorator_arg(di, 0)).describe(nox.reflect.decorator_arg(di, 1))
+                    elif dname == "field_optional" and ac >= 1:
+                        self.require_field(nox.reflect.decorator_arg(di, 0)).optional()
+                    elif dname == "field_nullable" and ac >= 1:
+                        self.require_field(nox.reflect.decorator_arg(di, 0)).nullable()
+                    elif dname == "field_required" and ac >= 1:
+                        rf: Field = self.require_field(nox.reflect.decorator_arg(di, 0))
+                        if rf.mode == MODE_OPTIONAL_NULLABLE:
+                            rf.mode = MODE_REQUIRED_NULLABLE
+                        elif rf.mode == MODE_OPTIONAL:
+                            rf.mode = MODE_REQUIRED
+                    elif dname == "field_safe_int53" and ac >= 1:
+                        self.require_field(nox.reflect.decorator_arg(di, 0)).safe_int53()
+                    elif dname == "field_regex" and ac >= 2:
+                        self.require_field(nox.reflect.decorator_arg(di, 0)).regex(nox.reflect.decorator_arg(di, 1))
+                    elif dname == "field_format" and ac >= 2:
+                        ff_target: Field = self.require_field(nox.reflect.decorator_arg(di, 0))
+                        fmt_s: str = nox.reflect.decorator_arg(di, 1)
+                        if fmt_s == "email":
+                            ff_target.email()
+                        elif fmt_s == "url":
+                            ff_target.url()
+                        elif fmt_s == "uuid":
+                            ff_target.uuid()
+                        elif fmt_s == "uuid7":
+                            ff_target.uuid7()
+                        elif fmt_s == "date":
+                            ff_target.date()
+                        elif fmt_s == "time":
+                            ff_target.time()
+                        elif fmt_s == "datetime" or fmt_s == "date-time":
+                            ff_target.datetime()
+                        elif fmt_s == "timezone":
+                            ff_target.timezone()
+                        else:
+                            raise ValueError("Invalid @field_format('" + fmt_s + "') on class '" + class_name + "'")
+                    elif dname == "field_bounds" and ac >= 3:
+                        bf: Field = self.require_field(nox.reflect.decorator_arg(di, 0))
+                        if nox.reflect.decorator_arg_kind(di, 1) == 1:
+                            bmin_i: int = nox.reflect.decorator_arg_int(di, 1)
+                            if bf.kind == "int":
+                                bf.min_i(bmin_i)
+                            elif bf.kind == "float":
+                                bf.min(float(bmin_i))
+                            elif bf.kind == "decimal":
+                                bf.min_dec(nox.decimal.from_int(bmin_i))
+                            elif bf.kind == "bigint":
+                                bf.min_big(nox.bigint.from_int(bmin_i))
+                        elif nox.reflect.decorator_arg_kind(di, 1) == 0:
+                            bmin_s: str = nox.reflect.decorator_arg(di, 1)
+                            if len(bmin_s) > 0:
+                                if bf.kind == "int":
+                                    bf.min_i(int(bmin_s))
+                                elif bf.kind == "float":
+                                    bf.min(float(bmin_s))
+                                elif bf.kind == "decimal":
+                                    bf.min_dec(nox.decimal.parse(bmin_s))
+                                elif bf.kind == "bigint":
+                                    bf.min_big(nox.bigint.parse(bmin_s))
+                        if nox.reflect.decorator_arg_kind(di, 2) == 1:
+                            bmax_i: int = nox.reflect.decorator_arg_int(di, 2)
+                            if bf.kind == "int":
+                                bf.max_i(bmax_i)
+                            elif bf.kind == "float":
+                                bf.max(float(bmax_i))
+                            elif bf.kind == "decimal":
+                                bf.max_dec(nox.decimal.from_int(bmax_i))
+                            elif bf.kind == "bigint":
+                                bf.max_big(nox.bigint.from_int(bmax_i))
+                        elif nox.reflect.decorator_arg_kind(di, 2) == 0:
+                            bmax_s: str = nox.reflect.decorator_arg(di, 2)
+                            if len(bmax_s) > 0:
+                                if bf.kind == "int":
+                                    bf.max_i(int(bmax_s))
+                                elif bf.kind == "float":
+                                    bf.max(float(bmax_s))
+                                elif bf.kind == "decimal":
+                                    bf.max_dec(nox.decimal.parse(bmax_s))
+                                elif bf.kind == "bigint":
+                                    bf.max_big(nox.bigint.parse(bmax_s))
+                    elif dname == "field_len" and ac >= 3:
+                        lf: Field = self.require_field(nox.reflect.decorator_arg(di, 0))
+                        lmin: int = nox.reflect.decorator_arg_int(di, 1)
+                        lmax: int = nox.reflect.decorator_arg_int(di, 2)
+                        if lf.kind == "list":
+                            if lmin >= 0:
+                                lf.min_items(lmin)
+                            if lmax >= 0:
+                                lf.max_items(lmax)
+                        else:
+                            if lmin >= 0:
+                                lf.min_length(lmin)
+                            if lmax >= 0:
+                                lf.max_length(lmax)
+                    elif dname == "field_items" and ac >= 3:
+                        itf: Field = self.require_field(nox.reflect.decorator_arg(di, 0))
+                        imin: int = nox.reflect.decorator_arg_int(di, 1)
+                        imax: int = nox.reflect.decorator_arg_int(di, 2)
+                        if imin >= 0:
+                            itf.min_items(imin)
+                        if imax >= 0:
+                            itf.max_items(imax)
+                    elif dname == "field_decimal_scale" and ac >= 3:
+                        dsf: Field = self.require_field(nox.reflect.decorator_arg(di, 0))
+                        dmax_d: int = nox.reflect.decorator_arg_int(di, 1)
+                        dplaces: int = nox.reflect.decorator_arg_int(di, 2)
+                        if dmax_d > 0:
+                            dsf.max_digits(dmax_d)
+                        if dplaces >= 0:
+                            dsf.decimal_places(dplaces)
+                    elif dname == "field_choices" and ac >= 2 and nox.reflect.decorator_arg_kind(di, 1) == 3:
+                        cf: Field = self.require_field(nox.reflect.decorator_arg(di, 0))
+                        c_opts: list[str] = []
+                        clen: int = nox.reflect.decorator_arg_list_len(di, 1)
+                        cli: int = 0
+                        while cli < clen:
+                            c_opts.append(nox.reflect.decorator_arg_list_item(di, 1, cli))
+                            cli = cli + 1
+                        cf.in_choices(c_opts)
+                    elif dname == "field_strip" and ac >= 1:
+                        self.require_field(nox.reflect.decorator_arg(di, 0)).strip()
+                    elif dname == "field_lower" and ac >= 1:
+                        self.require_field(nox.reflect.decorator_arg(di, 0)).to_lower()
+                    elif dname == "field_upper" and ac >= 1:
+                        self.require_field(nox.reflect.decorator_arg(di, 0)).to_upper()
+                    elif dname == "field_lower_tr" and ac >= 1:
+                        self.require_field(nox.reflect.decorator_arg(di, 0)).lower_tr()
+                    elif dname == "field_upper_tr" and ac >= 1:
+                        self.require_field(nox.reflect.decorator_arg(di, 0)).upper_tr()
+                    elif dname == "field_normalize" and ac >= 2:
+                        self.require_field(nox.reflect.decorator_arg(di, 0)).unicode_normalize(nox.reflect.decorator_arg(di, 1))
+                    elif dname == "field_default" and ac >= 2:
+                        dfld: Field = self.require_field(nox.reflect.decorator_arg(di, 0))
+                        ak: int = nox.reflect.decorator_arg_kind(di, 1)
+                        if ak == 0:
+                            sval: str = nox.reflect.decorator_arg(di, 1)
+                            if dfld.kind == "string":
+                                dfld.default_s(sval)
+                            elif dfld.kind == "float":
+                                dfld.default_f(float(sval))
+                            elif dfld.kind == "decimal":
+                                dfld.default_dec(nox.decimal.parse(sval))
+                            elif dfld.kind == "bigint":
+                                dfld.default_big(nox.bigint.parse(sval))
+                        elif ak == 1:
+                            ival: int = nox.reflect.decorator_arg_int(di, 1)
+                            if dfld.kind == "int":
+                                dfld.default_i(ival)
+                            elif dfld.kind == "float":
+                                dfld.default_f(float(ival))
+                            elif dfld.kind == "decimal":
+                                dfld.default_dec(nox.decimal.from_int(ival))
+                            elif dfld.kind == "bigint":
+                                dfld.default_big(nox.bigint.from_int(ival))
+                        elif ak == 2:
+                            dfld.default_b(nox.reflect.decorator_arg_bool(di, 1))
+            di = di + 1
+
     def validate_at(self: Schema, v: JsonValue, prefix: str, depth: int) -> ValidationResult:
+        return self._validate_at_ext(v, prefix, depth, "")
+
+    def _validate_at_ext(self: Schema, v: JsonValue, prefix: str, depth: int, extra_allowed_key: str) -> ValidationResult:
         data: ValidatedData = ValidatedData()
         err_list: list[FieldError] = []
 
@@ -629,49 +1299,45 @@ class Schema:
             )
             return ValidationResult(False, data, err_list)
 
-        # Policy check: unknown/extra fields
-        if self.policy == POLICY_FORBID:
-            n_keys: int = nox.json.object_len(v)
-            ki: int = 0
-            while ki < n_keys:
-                k: str = nox.json.object_key(v, ki)
-                matched: Field | None = self.get_field(k)
-                if matched is None:
-                    p_extra: str = k
-                    if prefix != "":
-                        p_extra = prefix + "." + k
-                    err_list.append(
-                        FieldError(p_extra, CODE_EXTRA_FIELD, "Unexpected unknown field: '" + p_extra + "'", "none", "present")
-                    )
-                    if len(err_list) >= self.max_errors:
-                        err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED, "Error limit reached", str(self.max_errors), str(len(err_list))))
-                        return ValidationResult(False, data, err_list)
-                ki = ki + 1
-        elif self.policy == POLICY_ALLOW:
-            n_keys_allow: int = nox.json.object_len(v)
-            ki_allow: int = 0
-            while ki_allow < n_keys_allow:
-                k_allow: str = nox.json.object_key(v, ki_allow)
-                matched_allow: Field | None = self.get_field(k_allow)
-                if matched_allow is None:
-                    extra_val: JsonValue = nox.json.object_value(v, ki_allow)
-                    data.set_extra(k_allow, nox.json.dump(extra_val))
-                ki_allow = ki_allow + 1
+        # Single-pass object key scan: enforces unknown-field policy and indexes matched fields
+        found_fields: dict[str, JsonValue] = {}
+        n_keys: int = nox.json.object_len(v)
+        ki: int = 0
+        while ki < n_keys:
+            k: str = nox.json.object_key(v, ki)
+            matched: Field | None = self.get_field(k)
+            if matched is None:
+                if len(extra_allowed_key) == 0 or k != extra_allowed_key:
+                    if self.policy == POLICY_FORBID:
+                        p_extra: str = k
+                        if prefix != "":
+                            p_extra = prefix + "." + k
+                        err_list.append(
+                            FieldError(p_extra, CODE_EXTRA_FIELD, "Unexpected unknown field: '" + p_extra + "'", "none", "present")
+                        )
+                        if len(err_list) >= self.max_errors:
+                            err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED, "Error limit reached", str(self.max_errors), str(len(err_list))))
+                            return ValidationResult(False, data, err_list)
+                    elif self.policy == POLICY_ALLOW:
+                        extra_val: JsonValue = nox.json.object_value(v, ki)
+                        data.set_extra(k, nox.json.dump(extra_val))
+            else:
+                eff: str = matched.name
+                if len(matched.json_name) > 0:
+                    eff = matched.json_name
+                if k == eff and matched.name not in found_fields:
+                    found_fields[matched.name] = nox.json.object_value(v, ki)
+            ki = ki + 1
 
         # Field validations in schema order
         fi: int = 0
         while fi < len(self.fields):
             field: Field = self.fields[fi]
-            effective_key: str = field.name
-            if len(field.json_name) > 0:
-                effective_key = field.json_name
-
             full_path: str = field.name
             if prefix != "":
                 full_path = prefix + "." + field.name
 
-            raw_val: JsonValue | None = _object_lookup(v, effective_key)
-            if raw_val is None:
+            if field.name not in found_fields:
                 # Missing from JSON
                 if field.has_default:
                     if field.kind == "string":
@@ -682,12 +1348,16 @@ class Schema:
                         data.set_float(field.name, field.default_float)
                     elif field.kind == "bool":
                         data.set_bool(field.name, field.default_bool)
+                    elif field.kind == "decimal":
+                        data.set_decimal(field.name, field.default_decimal)
+                    elif field.kind == "bigint":
+                        data.set_bigint(field.name, field.default_bigint)
                 elif field.mode == MODE_REQUIRED or field.mode == MODE_REQUIRED_NULLABLE:
                     err_list.append(
                         FieldError(full_path, CODE_MISSING_FIELD, "Missing required field: '" + full_path + "'", field.kind, "missing")
                     )
             else:
-                field_val: JsonValue = raw_val
+                field_val: JsonValue = found_fields[field.name]
                 if nox.json.is_null(field_val):
                     if field.mode == MODE_REQUIRED_NULLABLE or field.mode == MODE_OPTIONAL_NULLABLE:
                         data.set_null(field.name)
@@ -715,68 +1385,11 @@ class Schema:
                                 FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected string", "string", _describe_json_kind(field_val))
                             )
                         else:
-                            sv: str = sv_opt
-                            actual_repr: str = sv
-                            if field.is_secret:
-                                actual_repr = "[REDACTED]"
-
-                            if field.has_min_len and len(sv) < field.min_len:
-                                err_list.append(
-                                    FieldError(full_path, CODE_STRING_TOO_SHORT, "Field '" + full_path + "' must have at least " + str(field.min_len) + " characters", "length >= " + str(field.min_len), str(len(sv)))
-                                )
-                            if field.has_max_len and len(sv) > field.max_len:
-                                err_list.append(
-                                    FieldError(full_path, CODE_STRING_TOO_LONG, "Field '" + full_path + "' must have at most " + str(field.max_len) + " characters", "length <= " + str(field.max_len), str(len(sv)))
-                                )
-                            if len(field.choices) > 0:
-                                matched_choice: bool = False
-                                ci: int = 0
-                                while ci < len(field.choices):
-                                    if field.choices[ci] == sv:
-                                        matched_choice = True
-                                    ci = ci + 1
-                                if not matched_choice:
-                                    err_list.append(
-                                        FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed choices", "choice", actual_repr)
-                                    )
-                            if len(field.pattern) > 0 and not nox.regex.is_full_match(field.pattern, sv):
-                                err_list.append(
-                                    FieldError(full_path, CODE_PATTERN_MISMATCH, "Field '" + full_path + "' does not match pattern: " + field.pattern, field.pattern, actual_repr)
-                                )
-                            if field.fmt == "email" and not validators.is_valid_email(sv):
-                                err_list.append(
-                                    FieldError(full_path, CODE_INVALID_EMAIL, "Field '" + full_path + "' is not a valid email address", "email", actual_repr)
-                                )
-                            if field.fmt == "url" and not validators.is_valid_url(sv):
-                                err_list.append(
-                                    FieldError(full_path, CODE_INVALID_URL, "Field '" + full_path + "' is not a valid absolute URL", "url", actual_repr)
-                                )
-                            if field.fmt == "uuid" and not validators.is_valid_uuid(sv):
-                                err_list.append(
-                                    FieldError(full_path, CODE_INVALID_UUID, "Field '" + full_path + "' is not a valid UUID", "uuid", actual_repr)
-                                )
-                            if field.fmt == "date" and not validators.is_valid_date(sv):
-                                err_list.append(
-                                    FieldError(full_path, CODE_INVALID_DATE, "Field '" + full_path + "' is not a valid ISO 8601 date (YYYY-MM-DD)", "date", actual_repr)
-                                )
-                            if field.fmt == "time" and not validators.is_valid_time(sv):
-                                err_list.append(
-                                    FieldError(full_path, CODE_INVALID_TIME, "Field '" + full_path + "' is not a valid ISO 8601 time (HH:MM:SS)", "time", actual_repr)
-                                )
-                            if field.fmt == "date-time" and not validators.is_valid_datetime(sv):
-                                err_list.append(
-                                    FieldError(full_path, CODE_INVALID_DATETIME, "Field '" + full_path + "' is not a valid ISO 8601 datetime", "date-time", actual_repr)
-                                )
+                            sv: str = _validate_string_value(field, full_path, sv_opt, err_list)
                             data.set_str(field.name, sv)
 
                     elif field.kind == "int":
-                        iv_opt: int | None = None
-                        if nox.json.is_number(field_val):
-                            nv: float = nox.json.as_number(field_val)
-                            if validators.is_valid_int(nv):
-                                iv_opt = int(nv)
-                        elif self.coercion == COERCION_LAX and nox.json.is_string(field_val):
-                            iv_opt = _try_coerce_int(nox.json.as_string(field_val))
+                        iv_opt: int | None = _parse_json_int(field_val, field.is_safe_int53, self.coercion == COERCION_LAX)
 
                         if iv_opt is None:
                             err_list.append(
@@ -895,6 +1508,28 @@ class Schema:
                         else:
                             data.set_bool(field.name, bv_opt)
 
+                    elif field.kind == "decimal":
+                        dv_opt: Decimal | None = _parse_json_decimal(field_val)
+                        if dv_opt is None:
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected decimal string or number", "decimal", _describe_json_kind(field_val))
+                            )
+                        else:
+                            dv: Decimal = dv_opt
+                            _validate_decimal_value(field, full_path, dv, err_list)
+                            data.set_decimal(field.name, dv)
+
+                    elif field.kind == "bigint":
+                        bgv_opt: BigInt | None = _parse_json_bigint(field_val)
+                        if bgv_opt is None:
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected bigint string or integer", "bigint", _describe_json_kind(field_val))
+                            )
+                        else:
+                            bgv: BigInt = bgv_opt
+                            _validate_bigint_value(field, full_path, bgv, err_list)
+                            data.set_bigint(field.name, bgv)
+
                     elif field.kind == "object":
                         if not nox.json.is_object(field_val):
                             err_list.append(
@@ -913,6 +1548,20 @@ class Schema:
                                         si = si + 1
                                 else:
                                     data.set_object(field.name, sub_res.data)
+
+                    elif field.kind == "union":
+                        u_sub: UnionSchema | None = field.union_schema
+                        if u_sub is not None:
+                            if u_sub.max_depth > self.max_depth:
+                                u_sub.max_depth = self.max_depth
+                            u_res: ValidationResult = u_sub.validate_at(field_val, full_path, depth + 1)
+                            if not u_res.is_valid:
+                                ui: int = 0
+                                while ui < len(u_res.errors):
+                                    err_list.append(u_res.errors[ui])
+                                    ui = ui + 1
+                            else:
+                                data.set_object(field.name, u_res.data)
 
                     elif field.kind == "list":
                         if not nox.json.is_array(field_val):
@@ -951,12 +1600,13 @@ class Schema:
                                 while ai < alen:
                                     el: JsonValue = nox.json.array_get(field_val, ai)
                                     el_path: str = full_path + "[" + str(ai) + "]"
-                                    if not nox.json.is_number(el) or not validators.is_valid_int(nox.json.as_number(el)):
+                                    el_int: int | None = _parse_json_int(el, field.is_safe_int53, False)
+                                    if el_int is None:
                                         err_list.append(
                                             FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected integer", "int", _describe_json_kind(el))
                                         )
                                     else:
-                                        i_items.append(int(nox.json.as_number(el)))
+                                        i_items.append(el_int)
                                     ai = ai + 1
                                 data.set_list_int(field.name, i_items)
 
@@ -1015,6 +1665,27 @@ class Schema:
                                                 o_items.append(el_res.data)
                                     ai = ai + 1
                                 data.set_list_object(field.name, o_items)
+
+                            elif field.item_kind == "union":
+                                u_items: list[ValidatedData] = []
+                                item_u: UnionSchema | None = field.item_union
+                                ai: int = 0
+                                while ai < alen:
+                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    el_path: str = full_path + "[" + str(ai) + "]"
+                                    if item_u is not None:
+                                        if item_u.max_depth > self.max_depth:
+                                            item_u.max_depth = self.max_depth
+                                        eu_res: ValidationResult = item_u.validate_at(el, el_path, depth + 1)
+                                        if not eu_res.is_valid:
+                                            eui: int = 0
+                                            while eui < len(eu_res.errors):
+                                                err_list.append(eu_res.errors[eui])
+                                                eui = eui + 1
+                                        else:
+                                            u_items.append(eu_res.data)
+                                    ai = ai + 1
+                                data.set_list_object(field.name, u_items)
 
             if len(err_list) >= self.max_errors:
                 err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED, "Error limit reached", str(self.max_errors), str(len(err_list))))
@@ -1095,6 +1766,10 @@ class Schema:
                         data.set_float(field.name, field.default_float)
                     elif field.kind == "bool":
                         data.set_bool(field.name, field.default_bool)
+                    elif field.kind == "decimal":
+                        data.set_decimal(field.name, field.default_decimal)
+                    elif field.kind == "bigint":
+                        data.set_bigint(field.name, field.default_bigint)
                 elif field.mode == MODE_REQUIRED or field.mode == MODE_REQUIRED_NULLABLE:
                     err_list.append(
                         FieldError(field.name, CODE_MISSING_FIELD, "Missing required database column: '" + field.name + "'", field.kind, "missing")
@@ -1115,54 +1790,8 @@ class Schema:
                         actual_repr = "[REDACTED]"
 
                     if field.kind == "string":
-                        if field.has_min_len and len(raw_str) < field.min_len:
-                            err_list.append(
-                                FieldError(field.name, CODE_STRING_TOO_SHORT, "Field '" + field.name + "' must have at least " + str(field.min_len) + " characters", "length >= " + str(field.min_len), str(len(raw_str)))
-                            )
-                        if field.has_max_len and len(raw_str) > field.max_len:
-                            err_list.append(
-                                FieldError(field.name, CODE_STRING_TOO_LONG, "Field '" + field.name + "' must have at most " + str(field.max_len) + " characters", "length <= " + str(field.max_len), str(len(raw_str)))
-                            )
-                        if len(field.choices) > 0:
-                            matched_ch: bool = False
-                            chi: int = 0
-                            while chi < len(field.choices):
-                                if field.choices[chi] == raw_str:
-                                    matched_ch = True
-                                chi = chi + 1
-                            if not matched_ch:
-                                err_list.append(
-                                    FieldError(field.name, CODE_CHOICE_MISMATCH, "Field '" + field.name + "' must be one of the allowed choices", "choice", actual_repr)
-                                )
-                        if len(field.pattern) > 0 and not nox.regex.is_full_match(field.pattern, raw_str):
-                            err_list.append(
-                                FieldError(field.name, CODE_PATTERN_MISMATCH, "Field '" + field.name + "' does not match pattern: " + field.pattern, field.pattern, actual_repr)
-                            )
-                        if field.fmt == "email" and not validators.is_valid_email(raw_str):
-                            err_list.append(
-                                FieldError(field.name, CODE_INVALID_EMAIL, "Field '" + field.name + "' is not a valid email address", "email", actual_repr)
-                            )
-                        if field.fmt == "url" and not validators.is_valid_url(raw_str):
-                            err_list.append(
-                                FieldError(field.name, CODE_INVALID_URL, "Field '" + field.name + "' is not a valid absolute URL", "url", actual_repr)
-                            )
-                        if field.fmt == "uuid" and not validators.is_valid_uuid(raw_str):
-                            err_list.append(
-                                FieldError(field.name, CODE_INVALID_UUID, "Field '" + field.name + "' is not a valid UUID", "uuid", actual_repr)
-                            )
-                        if field.fmt == "date" and not validators.is_valid_date(raw_str):
-                            err_list.append(
-                                FieldError(field.name, CODE_INVALID_DATE, "Field '" + field.name + "' is not a valid ISO 8601 date (YYYY-MM-DD)", "date", actual_repr)
-                            )
-                        if field.fmt == "time" and not validators.is_valid_time(raw_str):
-                            err_list.append(
-                                FieldError(field.name, CODE_INVALID_TIME, "Field '" + field.name + "' is not a valid ISO 8601 time (HH:MM:SS)", "time", actual_repr)
-                            )
-                        if field.fmt == "date-time" and not validators.is_valid_datetime(raw_str):
-                            err_list.append(
-                                FieldError(field.name, CODE_INVALID_DATETIME, "Field '" + field.name + "' is not a valid ISO 8601 datetime", "date-time", actual_repr)
-                            )
-                        data.set_str(field.name, raw_str)
+                        sv_row: str = _validate_string_value(field, field.name, raw_str, err_list)
+                        data.set_str(field.name, sv_row)
 
                     elif field.kind == "int":
                         iv_opt: int | None = None
@@ -1242,6 +1871,26 @@ class Schema:
                             err_list.append(
                                 FieldError(field.name, CODE_TYPE_MISMATCH, "Column '" + field.name + "' expected boolean (0/1 or true/false)", "bool", actual_repr)
                             )
+                    elif field.kind == "decimal":
+                        dv_row_opt: Decimal | None = _parse_decimal_str(raw_str)
+                        if dv_row_opt is None:
+                            err_list.append(
+                                FieldError(field.name, CODE_TYPE_MISMATCH, "Column '" + field.name + "' expected decimal", "decimal", actual_repr)
+                            )
+                        else:
+                            dv_row: Decimal = dv_row_opt
+                            _validate_decimal_value(field, field.name, dv_row, err_list)
+                            data.set_decimal(field.name, dv_row)
+                    elif field.kind == "bigint":
+                        bgv_row_opt: BigInt | None = _parse_bigint_str(raw_str)
+                        if bgv_row_opt is None:
+                            err_list.append(
+                                FieldError(field.name, CODE_TYPE_MISMATCH, "Column '" + field.name + "' expected bigint", "bigint", actual_repr)
+                            )
+                        else:
+                            bgv_row: BigInt = bgv_row_opt
+                            _validate_bigint_value(field, field.name, bgv_row, err_list)
+                            data.set_bigint(field.name, bgv_row)
             fi = fi + 1
 
         # 3. Custom validators
@@ -1289,8 +1938,29 @@ class Schema:
             errs.append(FieldError("root", CODE_INVALID_YAML, "Malformed YAML syntax: " + e.message, "valid YAML", "syntax error"))
             return ValidationResult(False, data, errs)
 
+    # Lazily streams Newline-Delimited JSON (NDJSON) records without parsing the entire payload at once.
+    def stream_ndjson_lines(self: Schema, lines: list[str]) -> Iterator[ValidationResult]:
+        i: int = 0
+        while i < len(lines):
+            trimmed: str = nox.strings.trim(lines[i])
+            if len(trimmed) > 0:
+                yield self.validate_json(trimmed)
+            i = i + 1
+
+    def stream_ndjson(self: Schema, ndjson_str: str) -> Iterator[ValidationResult]:
+        lines: list[str] = nox.strings.split(ndjson_str, "\n")
+        i: int = 0
+        while i < len(lines):
+            trimmed: str = nox.strings.trim(lines[i])
+            if len(trimmed) > 0:
+                yield self.validate_json(trimmed)
+            i = i + 1
+
     # In-memory validation of an existing ValidatedData instance against schema constraints (zero JSON overhead)
     def validate_data_at(self: Schema, data: ValidatedData, prefix: str, depth: int) -> ValidationResult:
+        return self._validate_data_at_ext(data, prefix, depth, "")
+
+    def _validate_data_at_ext(self: Schema, data: ValidatedData, prefix: str, depth: int, extra_allowed_key: str) -> ValidationResult:
         err_list: list[FieldError] = []
 
         if depth > self.max_depth:
@@ -1307,15 +1977,18 @@ class Schema:
                 tk: str = t_keys[tki]
                 matched: Field | None = self.get_field(tk)
                 if matched is None:
-                    p_extra: str = tk
-                    if prefix != "":
-                        p_extra = prefix + "." + tk
-                    err_list.append(
-                        FieldError(p_extra, CODE_EXTRA_FIELD, "Unexpected unknown field: '" + p_extra + "'", "none", "present")
-                    )
-                    if len(err_list) >= self.max_errors:
-                        err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED, "Error limit reached", str(self.max_errors), str(len(err_list))))
-                        return ValidationResult(False, data, err_list)
+                    if len(extra_allowed_key) > 0 and tk == extra_allowed_key:
+                        pass
+                    else:
+                        p_extra: str = tk
+                        if prefix != "":
+                            p_extra = prefix + "." + tk
+                        err_list.append(
+                            FieldError(p_extra, CODE_EXTRA_FIELD, "Unexpected unknown field: '" + p_extra + "'", "none", "present")
+                        )
+                        if len(err_list) >= self.max_errors:
+                            err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED, "Error limit reached", str(self.max_errors), str(len(err_list))))
+                            return ValidationResult(False, data, err_list)
                 tki = tki + 1
 
         fi: int = 0
@@ -1339,6 +2012,10 @@ class Schema:
                         data.set_float(field.name, field.default_float)
                     elif field.kind == "bool":
                         data.set_bool(field.name, field.default_bool)
+                    elif field.kind == "decimal":
+                        data.set_decimal(field.name, field.default_decimal)
+                    elif field.kind == "bigint":
+                        data.set_bigint(field.name, field.default_bigint)
                 elif field.mode == MODE_REQUIRED or field.mode == MODE_REQUIRED_NULLABLE:
                     err_list.append(
                         FieldError(full_path, CODE_MISSING_FIELD, "Missing required field: '" + full_path + "'", field.kind, "missing")
@@ -1359,58 +2036,8 @@ class Schema:
                             FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected string", "string", data.kind_of(field.name))
                         )
                     else:
-                        sv: str = data.get_str(field.name)
-                        actual_repr: str = sv
-                        if field.is_secret:
-                            actual_repr = "[REDACTED]"
-
-                        if field.has_min_len and len(sv) < field.min_len:
-                            err_list.append(
-                                FieldError(full_path, CODE_STRING_TOO_SHORT, "Field '" + full_path + "' must have at least " + str(field.min_len) + " characters", "length >= " + str(field.min_len), str(len(sv)))
-                            )
-                        if field.has_max_len and len(sv) > field.max_len:
-                            err_list.append(
-                                FieldError(full_path, CODE_STRING_TOO_LONG, "Field '" + full_path + "' must have at most " + str(field.max_len) + " characters", "length <= " + str(field.max_len), str(len(sv)))
-                            )
-                        if len(field.choices) > 0:
-                            matched_ch: bool = False
-                            chi: int = 0
-                            while chi < len(field.choices):
-                                if field.choices[chi] == sv:
-                                    matched_ch = True
-                                chi = chi + 1
-                            if not matched_ch:
-                                err_list.append(
-                                    FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed choices", "choice", actual_repr)
-                                )
-                        if len(field.pattern) > 0 and not nox.regex.is_full_match(field.pattern, sv):
-                            err_list.append(
-                                FieldError(full_path, CODE_PATTERN_MISMATCH, "Field '" + full_path + "' does not match pattern: " + field.pattern, field.pattern, actual_repr)
-                            )
-                        if field.fmt == "email" and not validators.is_valid_email(sv):
-                            err_list.append(
-                                FieldError(full_path, CODE_INVALID_EMAIL, "Field '" + full_path + "' is not a valid email address", "email", actual_repr)
-                            )
-                        if field.fmt == "url" and not validators.is_valid_url(sv):
-                            err_list.append(
-                                FieldError(full_path, CODE_INVALID_URL, "Field '" + full_path + "' is not a valid absolute URL", "url", actual_repr)
-                            )
-                        if field.fmt == "uuid" and not validators.is_valid_uuid(sv):
-                            err_list.append(
-                                FieldError(full_path, CODE_INVALID_UUID, "Field '" + full_path + "' is not a valid UUID", "uuid", actual_repr)
-                            )
-                        if field.fmt == "date" and not validators.is_valid_date(sv):
-                            err_list.append(
-                                FieldError(full_path, CODE_INVALID_DATE, "Field '" + full_path + "' is not a valid ISO 8601 date (YYYY-MM-DD)", "date", actual_repr)
-                            )
-                        if field.fmt == "time" and not validators.is_valid_time(sv):
-                            err_list.append(
-                                FieldError(full_path, CODE_INVALID_TIME, "Field '" + full_path + "' is not a valid ISO 8601 time (HH:MM:SS)", "time", actual_repr)
-                            )
-                        if field.fmt == "date-time" and not validators.is_valid_datetime(sv):
-                            err_list.append(
-                                FieldError(full_path, CODE_INVALID_DATETIME, "Field '" + full_path + "' is not a valid ISO 8601 datetime", "date-time", actual_repr)
-                            )
+                        sv: str = _validate_string_value(field, full_path, data.get_str(field.name), err_list)
+                        data.set_str(field.name, sv)
 
                 elif field.kind == "int":
                     if not data.has_int(field.name):
@@ -1419,6 +2046,10 @@ class Schema:
                         )
                     else:
                         iv: int = data.get_int(field.name)
+                        if field.is_safe_int53 and (iv > 9007199254740991 or iv < -9007199254740991):
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' exceeds safe 53-bit integer range", "safe_int53", str(iv))
+                            )
                         if field.has_min_int:
                             if field.is_exclusive_min:
                                 if iv <= field.min_val_int:
@@ -1517,6 +2148,24 @@ class Schema:
                             FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected boolean", "bool", data.kind_of(field.name))
                         )
 
+                elif field.kind == "decimal":
+                    if not data.has_decimal(field.name):
+                        err_list.append(
+                            FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected decimal", "decimal", data.kind_of(field.name))
+                        )
+                    else:
+                        dv_mem: Decimal = data.get_decimal(field.name)
+                        _validate_decimal_value(field, full_path, dv_mem, err_list)
+
+                elif field.kind == "bigint":
+                    if not data.has_bigint(field.name):
+                        err_list.append(
+                            FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected bigint", "bigint", data.kind_of(field.name))
+                        )
+                    else:
+                        bgv_mem: BigInt = data.get_bigint(field.name)
+                        _validate_bigint_value(field, full_path, bgv_mem, err_list)
+
                 elif field.kind == "object":
                     if not data.has_object(field.name):
                         err_list.append(
@@ -1534,6 +2183,24 @@ class Schema:
                                 while si < len(sub_res.errors):
                                     err_list.append(sub_res.errors[si])
                                     si = si + 1
+
+                elif field.kind == "union":
+                    if not data.has_object(field.name):
+                        err_list.append(
+                            FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected union object", "object", data.kind_of(field.name))
+                        )
+                    else:
+                        u_sub_m: UnionSchema | None = field.union_schema
+                        if u_sub_m is not None:
+                            if u_sub_m.max_depth > self.max_depth:
+                                u_sub_m.max_depth = self.max_depth
+                            u_mem_data: ValidatedData = data.get_object(field.name)
+                            u_mem_res: ValidationResult = u_sub_m.validate_data_at(u_mem_data, full_path, depth + 1)
+                            if not u_mem_res.is_valid:
+                                umi: int = 0
+                                while umi < len(u_mem_res.errors):
+                                    err_list.append(u_mem_res.errors[umi])
+                                    umi = umi + 1
 
                 elif field.kind == "list":
                     alen: int = data.list_len(field.name)
@@ -1605,6 +2272,28 @@ class Schema:
                                                 k = k + 1
                                         j = j + 1
 
+                        elif field.item_kind == "union":
+                            if not data.has_list_object(field.name):
+                                err_list.append(
+                                    FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' elements expected union object", "list[object]", data.kind_of(field.name))
+                                )
+                            else:
+                                iu_sub: UnionSchema | None = field.item_union
+                                if iu_sub is not None:
+                                    if iu_sub.max_depth > self.max_depth:
+                                        iu_sub.max_depth = self.max_depth
+                                    sub_u_objs: list[ValidatedData] = data.get_list_object(field.name)
+                                    ju: int = 0
+                                    while ju < len(sub_u_objs):
+                                        item_upfx: str = full_path + "[" + str(ju) + "]"
+                                        item_ures: ValidationResult = iu_sub.validate_data_at(sub_u_objs[ju], item_upfx, depth + 1)
+                                        if not item_ures.is_valid:
+                                            ku: int = 0
+                                            while ku < len(item_ures.errors):
+                                                err_list.append(item_ures.errors[ku])
+                                                ku = ku + 1
+                                        ju = ju + 1
+
             if len(err_list) >= self.max_errors:
                 err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED, "Error limit reached", str(self.max_errors), str(len(err_list))))
                 return ValidationResult(False, data, err_list)
@@ -1640,7 +2329,12 @@ class Schema:
         return self.dump(res.data)
 
     def dump(self: Schema, data: ValidatedData) -> str:
+        return self._dump_with_extra_str(data, "", "")
+
+    def _dump_with_extra_str(self: Schema, data: ValidatedData, extra_key: str, extra_val: str) -> str:
         s: Serializer = Serializer()
+        if len(extra_key) > 0 and self.get_field(extra_key) is None:
+            s.str(extra_key, extra_val)
         fi: int = 0
         while fi < len(self.fields):
             f: Field = self.fields[fi]
@@ -1659,12 +2353,22 @@ class Schema:
                     s.float(out_key, data.get_float(f.name))
                 elif f.kind == "bool":
                     s.bool(out_key, data.get_bool(f.name))
+                elif f.kind == "decimal":
+                    s.decimal(out_key, data.get_decimal(f.name))
+                elif f.kind == "bigint":
+                    s.bigint(out_key, data.get_bigint(f.name))
                 elif f.kind == "object":
                     ns: Schema | None = f.nested_schema
                     if ns is not None:
                         sub_vd: ValidatedData = data.get_object(f.name)
                         sub_json: str = ns.dump(sub_vd)
                         s.raw_json(out_key, sub_json)
+                elif f.kind == "union":
+                    nu: UnionSchema | None = f.union_schema
+                    if nu is not None:
+                        sub_uvd: ValidatedData = data.get_object(f.name)
+                        sub_ujson: str = nu.dump(sub_uvd)
+                        s.raw_json(out_key, sub_ujson)
                 elif f.kind == "list":
                     if f.item_kind == "string" or f.item_kind == "str":
                         s.list_str(out_key, data.get_list_str(f.name))
@@ -1688,6 +2392,20 @@ class Schema:
                                 jwi = jwi + 1
                             jw.end_array()
                             s.raw_json(out_key, jw.build())
+                    elif f.item_kind == "union":
+                        iu_dump: UnionSchema | None = f.item_union
+                        if iu_dump is not None:
+                            sub_uobjs: list[ValidatedData] = data.get_list_object(f.name)
+                            jwu: JsonWriter = JsonWriter()
+                            jwu.begin_array()
+                            jwui: int = 0
+                            while jwui < len(sub_uobjs):
+                                uitem_json: str = iu_dump.dump(sub_uobjs[jwui])
+                                uitem_val: JsonValue = nox.json.parse(uitem_json)
+                                jwu.write_value(uitem_val)
+                                jwui = jwui + 1
+                            jwu.end_array()
+                            s.raw_json(out_key, jwu.build())
             fi = fi + 1
 
         if self.policy == POLICY_ALLOW:
@@ -1720,6 +2438,10 @@ class Schema:
                     tbl[out_key] = TomlValue(2, False, 0, data.get_float(f.name), "", [], {})
                 elif f.kind == "bool":
                     tbl[out_key] = TomlValue(3, data.get_bool(f.name), 0, 0.0, "", [], {})
+                elif f.kind == "decimal":
+                    tbl[out_key] = TomlValue(0, False, 0, 0.0, str(data.get_decimal(f.name)), [], {})
+                elif f.kind == "bigint":
+                    tbl[out_key] = TomlValue(0, False, 0, 0.0, data.get_bigint(f.name).to_str(), [], {})
                 elif f.kind == "list":
                     if f.item_kind == "string" or f.item_kind == "str":
                         ls: list[str] = data.get_list_str(f.name)
@@ -1777,6 +2499,10 @@ class Schema:
                     mapping[out_key] = YamlValue(2, False, 0, data.get_float(f.name), "", [], {})
                 elif f.kind == "bool":
                     mapping[out_key] = YamlValue(3, data.get_bool(f.name), 0, 0.0, "", [], {})
+                elif f.kind == "decimal":
+                    mapping[out_key] = YamlValue(0, False, 0, 0.0, str(data.get_decimal(f.name)), [], {})
+                elif f.kind == "bigint":
+                    mapping[out_key] = YamlValue(0, False, 0, 0.0, data.get_bigint(f.name).to_str(), [], {})
                 elif f.kind == "list":
                     if f.item_kind == "string" or f.item_kind == "str":
                         ls: list[str] = data.get_list_str(f.name)
@@ -1826,8 +2552,9 @@ class Schema:
         w.write_string("object")
 
         if include_defs:
-            # Collect definitions for root $defs (including all nested schemas in tree)
+            # Collect definitions for root $defs (including all nested schemas & unions in tree)
             defs: list[Schema] = []
+            union_defs: list[UnionSchema] = []
             di: int = 0
             while di < len(self.fields):
                 df: Field = self.fields[di]
@@ -1851,39 +2578,97 @@ class Schema:
                         si2 = si2 + 1
                     if not already_it:
                         defs.append(df_is)
+                df_us: UnionSchema | None = df.union_schema
+                if df_us != None:
+                    already_us: bool = False
+                    ui0: int = 0
+                    while ui0 < len(union_defs):
+                        if union_defs[ui0].name == df_us.name:
+                            already_us = True
+                        ui0 = ui0 + 1
+                    if not already_us:
+                        union_defs.append(df_us)
+                df_iu: UnionSchema | None = df.item_union
+                if df_iu != None:
+                    already_iu: bool = False
+                    ui1: int = 0
+                    while ui1 < len(union_defs):
+                        if union_defs[ui1].name == df_iu.name:
+                            already_iu = True
+                        ui1 = ui1 + 1
+                    if not already_iu:
+                        union_defs.append(df_iu)
                 di = di + 1
 
-            # Discover deeply nested schemas across collected definitions:
+            # Discover deeply nested schemas and unions across collected definitions:
             q_idx: int = 0
-            while q_idx < len(defs):
-                curr_def: Schema = defs[q_idx]
-                cfi: int = 0
-                while cfi < len(curr_def.fields):
-                    c_field: Field = curr_def.fields[cfi]
-                    c_ns: Schema | None = c_field.nested_schema
-                    if c_ns != None:
-                        already_c: bool = False
-                        csi: int = 0
-                        while csi < len(defs):
-                            if defs[csi].name == c_ns.name:
-                                already_c = True
-                            csi = csi + 1
-                        if not already_c:
-                            defs.append(c_ns)
-                    c_is: Schema | None = c_field.item_schema
-                    if c_is != None:
-                        already_cis: bool = False
-                        csi2: int = 0
-                        while csi2 < len(defs):
-                            if defs[csi2].name == c_is.name:
-                                already_cis = True
-                            csi2 = csi2 + 1
-                        if not already_cis:
-                            defs.append(c_is)
-                    cfi = cfi + 1
-                q_idx = q_idx + 1
+            uq_idx: int = 0
+            while q_idx < len(defs) or uq_idx < len(union_defs):
+                while uq_idx < len(union_defs):
+                    curr_u: UnionSchema = union_defs[uq_idx]
+                    uti: int = 0
+                    while uti < len(curr_u.variant_tags):
+                        v_s: Schema = curr_u.variants[curr_u.variant_tags[uti]]
+                        already_vs: bool = False
+                        vsi: int = 0
+                        while vsi < len(defs):
+                            if defs[vsi].name == v_s.name:
+                                already_vs = True
+                            vsi = vsi + 1
+                        if not already_vs:
+                            defs.append(v_s)
+                        uti = uti + 1
+                    uq_idx = uq_idx + 1
 
-            if len(defs) > 0:
+                if q_idx < len(defs):
+                    curr_def: Schema = defs[q_idx]
+                    cfi: int = 0
+                    while cfi < len(curr_def.fields):
+                        c_field: Field = curr_def.fields[cfi]
+                        c_ns: Schema | None = c_field.nested_schema
+                        if c_ns != None:
+                            already_c: bool = False
+                            csi: int = 0
+                            while csi < len(defs):
+                                if defs[csi].name == c_ns.name:
+                                    already_c = True
+                                csi = csi + 1
+                            if not already_c:
+                                defs.append(c_ns)
+                        c_is: Schema | None = c_field.item_schema
+                        if c_is != None:
+                            already_cis: bool = False
+                            csi2: int = 0
+                            while csi2 < len(defs):
+                                if defs[csi2].name == c_is.name:
+                                    already_cis = True
+                                csi2 = csi2 + 1
+                            if not already_cis:
+                                defs.append(c_is)
+                        c_us: UnionSchema | None = c_field.union_schema
+                        if c_us != None:
+                            already_cus: bool = False
+                            cui: int = 0
+                            while cui < len(union_defs):
+                                if union_defs[cui].name == c_us.name:
+                                    already_cus = True
+                                cui = cui + 1
+                            if not already_cus:
+                                union_defs.append(c_us)
+                        c_iu: UnionSchema | None = c_field.item_union
+                        if c_iu != None:
+                            already_ciu: bool = False
+                            cui2: int = 0
+                            while cui2 < len(union_defs):
+                                if union_defs[cui2].name == c_iu.name:
+                                    already_ciu = True
+                                cui2 = cui2 + 1
+                            if not already_ciu:
+                                union_defs.append(c_iu)
+                        cfi = cfi + 1
+                    q_idx = q_idx + 1
+
+            if len(defs) > 0 or len(union_defs) > 0:
                 w.write_key("$defs")
                 w.begin_object()
                 sdi: int = 0
@@ -1894,6 +2679,14 @@ class Schema:
                     sub_val: JsonValue = nox.json.parse(sub_json)
                     w.write_value(sub_val)
                     sdi = sdi + 1
+                udi: int = 0
+                while udi < len(union_defs):
+                    sub_u: UnionSchema = union_defs[udi]
+                    w.write_key(sub_u.name)
+                    sub_ujson: str = sub_u.to_json_schema(False)
+                    sub_uval: JsonValue = nox.json.parse(sub_ujson)
+                    w.write_value(sub_uval)
+                    udi = udi + 1
                 w.end_object()
 
         # Properties
@@ -1933,6 +2726,10 @@ class Schema:
                     w.write_key("format")
                     if f.fmt == "url":
                         w.write_string("uri")
+                    elif f.fmt == "uuid7":
+                        w.write_string("uuid")
+                    elif f.fmt == "timezone":
+                        w.write_string("iana-timezone")
                     else:
                         w.write_string(f.fmt)
                 if len(f.choices) > 0:
@@ -2018,6 +2815,28 @@ class Schema:
                 else:
                     w.write_string("boolean")
 
+            elif f.kind == "decimal":
+                w.write_key("type")
+                w.begin_array()
+                w.write_string("string")
+                w.write_string("number")
+                if is_nullable:
+                    w.write_string("null")
+                w.end_array()
+                w.write_key("format")
+                w.write_string("decimal")
+
+            elif f.kind == "bigint":
+                w.write_key("type")
+                w.begin_array()
+                w.write_string("string")
+                w.write_string("integer")
+                if is_nullable:
+                    w.write_string("null")
+                w.end_array()
+                w.write_key("format")
+                w.write_string("bigint")
+
             elif f.kind == "object":
                 f_ns: Schema | None = f.nested_schema
                 if f_ns != None:
@@ -2046,6 +2865,25 @@ class Schema:
                     else:
                         w.write_string("object")
 
+            elif f.kind == "union":
+                f_us: UnionSchema | None = f.union_schema
+                if f_us != None:
+                    if is_nullable:
+                        w.write_key("anyOf")
+                        w.begin_array()
+                        w.begin_object()
+                        w.write_key("$ref")
+                        w.write_string("#/$defs/" + f_us.name)
+                        w.end_object()
+                        w.begin_object()
+                        w.write_key("type")
+                        w.write_string("null")
+                        w.end_object()
+                        w.end_array()
+                    else:
+                        w.write_key("$ref")
+                        w.write_string("#/$defs/" + f_us.name)
+
             elif f.kind == "list":
                 w.write_key("type")
                 if is_nullable:
@@ -2064,21 +2902,26 @@ class Schema:
                 w.write_key("items")
                 w.begin_object()
                 f_is: Schema | None = f.item_schema
+                f_iu: UnionSchema | None = f.item_union
                 if f_is != None:
                     w.write_key("$ref")
                     w.write_string("#/$defs/" + f_is.name)
-                elif f.item_kind == "string":
-                    w.write_key("type")
-                    w.write_string("string")
-                elif f.item_kind == "int":
-                    w.write_key("type")
-                    w.write_string("integer")
-                elif f.item_kind == "float":
-                    w.write_key("type")
-                    w.write_string("number")
-                elif f.item_kind == "bool":
-                    w.write_key("type")
-                    w.write_string("boolean")
+                else:
+                    if f_iu != None:
+                        w.write_key("$ref")
+                        w.write_string("#/$defs/" + f_iu.name)
+                    elif f.item_kind == "string":
+                        w.write_key("type")
+                        w.write_string("string")
+                    elif f.item_kind == "int":
+                        w.write_key("type")
+                        w.write_string("integer")
+                    elif f.item_kind == "float":
+                        w.write_key("type")
+                        w.write_string("number")
+                    elif f.item_kind == "bool":
+                        w.write_key("type")
+                        w.write_string("boolean")
                 w.end_object()
 
             if f.has_default:
@@ -2091,6 +2934,10 @@ class Schema:
                     w.write_float(f.default_float)
                 elif f.kind == "bool":
                     w.write_bool(f.default_bool)
+                elif f.kind == "decimal":
+                    w.write_string(str(f.default_decimal))
+                elif f.kind == "bigint":
+                    w.write_string(f.default_bigint.to_str())
 
             if len(f.description) > 0:
                 w.write_key("description")
@@ -2122,6 +2969,302 @@ class Schema:
 
         w.write_key("additionalProperties")
         w.write_bool(self.policy != POLICY_FORBID)
+
+        w.end_object()
+        return w.build()
+
+class UnionSchema:
+    name: str
+    discriminator: str
+    variants: dict[str, Schema]
+    variant_tags: list[str]
+    max_depth: int
+    max_errors: int
+
+    def __init__(self: UnionSchema, name: str, discriminator: str) -> None:
+        self.name = name
+        self.discriminator = discriminator
+        self.variants = {}
+        self.variant_tags = []
+        self.max_depth = 32
+        self.max_errors = 50
+
+    def variant(self: UnionSchema, tag: str, s: Schema) -> UnionSchema:
+        if tag not in self.variants:
+            self.variant_tags.append(tag)
+        self.variants[tag] = s
+        return self
+
+    def add_variant(self: UnionSchema, tag: str, s: Schema) -> UnionSchema:
+        return self.variant(tag, s)
+
+    def set_max_depth(self: UnionSchema, depth: int) -> None:
+        self.max_depth = depth
+
+    def set_max_errors(self: UnionSchema, limit: int) -> None:
+        self.max_errors = limit
+
+    def validate(self: UnionSchema, v: JsonValue) -> ValidationResult:
+        return self.validate_at(v, "", 0)
+
+    def validate_at(self: UnionSchema, v: JsonValue, prefix: str, depth: int) -> ValidationResult:
+        data: ValidatedData = ValidatedData()
+        err_list: list[FieldError] = []
+
+        if depth > self.max_depth:
+            err_list.append(
+                FieldError(prefix, CODE_RECURSION_LIMIT, "Maximum nesting depth (" + str(self.max_depth) + ") exceeded", "depth <= " + str(self.max_depth), str(depth))
+            )
+            return ValidationResult(False, data, err_list)
+
+        if not nox.json.is_object(v):
+            p: str = prefix
+            if p == "":
+                p = "root"
+            err_list.append(
+                FieldError(p, CODE_EXPECTED_OBJECT, "Expected a JSON object for discriminated union at " + p, "object", _describe_json_kind(v))
+            )
+            return ValidationResult(False, data, err_list)
+
+        disc_path: str = self.discriminator
+        if prefix != "":
+            disc_path = prefix + "." + self.discriminator
+
+        disc_val_opt: JsonValue | None = _object_lookup(v, self.discriminator)
+        if disc_val_opt is None:
+            err_list.append(
+                FieldError(disc_path, CODE_MISSING_FIELD, "Missing discriminator field: '" + disc_path + "'", "string", "missing")
+            )
+            return ValidationResult(False, data, err_list)
+
+        disc_val: JsonValue = disc_val_opt
+        if not nox.json.is_string(disc_val):
+            err_list.append(
+                FieldError(disc_path, CODE_TYPE_MISMATCH, "Discriminator '" + disc_path + "' expected string", "string", _describe_json_kind(disc_val))
+            )
+            return ValidationResult(False, data, err_list)
+
+        tag: str = nox.json.as_string(disc_val)
+        if tag not in self.variants:
+            err_list.append(
+                FieldError(disc_path, CODE_CHOICE_MISMATCH, "Unknown union discriminator tag '" + tag + "' for '" + disc_path + "'", "one of registered union variants", tag)
+            )
+            return ValidationResult(False, data, err_list)
+
+        sub: Schema = self.variants[tag]
+        if sub.max_depth > self.max_depth:
+            sub.max_depth = self.max_depth
+        sub_res: ValidationResult = sub._validate_at_ext(v, prefix, depth, self.discriminator)
+        if sub_res.is_valid and not sub_res.data.has(self.discriminator):
+            sub_res.data.set_str(self.discriminator, tag)
+        return sub_res
+
+    def validate_json(self: UnionSchema, json_str: str) -> ValidationResult:
+        try:
+            v: JsonValue = nox.json.parse(json_str)
+            return self.validate(v)
+        except JsonError as e:
+            data: ValidatedData = ValidatedData()
+            errs: list[FieldError] = []
+            errs.append(FieldError("root", CODE_INVALID_JSON, "Malformed JSON syntax: " + e.message, "valid JSON", "syntax error"))
+            return ValidationResult(False, data, errs)
+
+    def validate_data(self: UnionSchema, data: ValidatedData) -> ValidationResult:
+        return self.validate_data_at(data, "", 0)
+
+    def validate_data_at(self: UnionSchema, data: ValidatedData, prefix: str, depth: int) -> ValidationResult:
+        err_list: list[FieldError] = []
+        if depth > self.max_depth:
+            err_list.append(
+                FieldError(prefix, CODE_RECURSION_LIMIT, "Maximum nesting depth (" + str(self.max_depth) + ") exceeded", "depth <= " + str(self.max_depth), str(depth))
+            )
+            return ValidationResult(False, data, err_list)
+
+        disc_path: str = self.discriminator
+        if prefix != "":
+            disc_path = prefix + "." + self.discriminator
+
+        if not data.has(self.discriminator):
+            err_list.append(
+                FieldError(disc_path, CODE_MISSING_FIELD, "Missing discriminator field: '" + disc_path + "'", "string", "missing")
+            )
+            return ValidationResult(False, data, err_list)
+        if not data.has_str(self.discriminator):
+            err_list.append(
+                FieldError(disc_path, CODE_TYPE_MISMATCH, "Discriminator '" + disc_path + "' expected string", "string", data.kind_of(self.discriminator))
+            )
+            return ValidationResult(False, data, err_list)
+
+        tag: str = data.get_str(self.discriminator)
+        if tag not in self.variants:
+            err_list.append(
+                FieldError(disc_path, CODE_CHOICE_MISMATCH, "Unknown union discriminator tag '" + tag + "' for '" + disc_path + "'", "one of registered union variants", tag)
+            )
+            return ValidationResult(False, data, err_list)
+
+        sub: Schema = self.variants[tag]
+        if sub.max_depth > self.max_depth:
+            sub.max_depth = self.max_depth
+        return sub._validate_data_at_ext(data, prefix, depth, self.discriminator)
+
+    def dump(self: UnionSchema, data: ValidatedData) -> str:
+        if not data.has_str(self.discriminator):
+            raise ValueError("Cannot serialize union '" + self.name + "' without string discriminator '" + self.discriminator + "'")
+        tag: str = data.get_str(self.discriminator)
+        if tag not in self.variants:
+            raise ValueError("Cannot serialize union '" + self.name + "' with unknown discriminator tag '" + tag + "'")
+        sub: Schema = self.variants[tag]
+        return sub._dump_with_extra_str(data, self.discriminator, tag)
+
+    def dump_checked(self: UnionSchema, data: ValidatedData) -> str:
+        res: ValidationResult = self.validate_data(data)
+        if not res.is_valid:
+            err_msg: str = "Validation failed in UnionSchema.dump_checked"
+            if len(res.errors) > 0:
+                err_msg = err_msg + ": " + res.errors[0].message
+            raise ValueError(err_msg)
+        return self.dump(res.data)
+
+    def to_json_schema(self: UnionSchema, include_defs: bool = True) -> str:
+        w: JsonWriter = JsonWriter()
+        w.begin_object()
+        if include_defs:
+            w.write_key("$schema")
+            w.write_string("https://json-schema.org/draft/2020-12/schema")
+        w.write_key("title")
+        w.write_string(self.name)
+
+        if include_defs:
+            defs: list[Schema] = []
+            union_defs: list[UnionSchema] = []
+            ti0: int = 0
+            while ti0 < len(self.variant_tags):
+                vs0: Schema = self.variants[self.variant_tags[ti0]]
+                already0: bool = False
+                si0: int = 0
+                while si0 < len(defs):
+                    if defs[si0].name == vs0.name:
+                        already0 = True
+                    si0 = si0 + 1
+                if not already0:
+                    defs.append(vs0)
+                ti0 = ti0 + 1
+
+            q_idx: int = 0
+            uq_idx: int = 0
+            while q_idx < len(defs) or uq_idx < len(union_defs):
+                while uq_idx < len(union_defs):
+                    cu: UnionSchema = union_defs[uq_idx]
+                    uti: int = 0
+                    while uti < len(cu.variant_tags):
+                        v_s: Schema = cu.variants[cu.variant_tags[uti]]
+                        already_vs: bool = False
+                        vsi: int = 0
+                        while vsi < len(defs):
+                            if defs[vsi].name == v_s.name:
+                                already_vs = True
+                            vsi = vsi + 1
+                        if not already_vs:
+                            defs.append(v_s)
+                        uti = uti + 1
+                    uq_idx = uq_idx + 1
+
+                if q_idx < len(defs):
+                    cd: Schema = defs[q_idx]
+                    cfi: int = 0
+                    while cfi < len(cd.fields):
+                        cf: Field = cd.fields[cfi]
+                        c_ns: Schema | None = cf.nested_schema
+                        if c_ns != None:
+                            already_c: bool = False
+                            csi: int = 0
+                            while csi < len(defs):
+                                if defs[csi].name == c_ns.name:
+                                    already_c = True
+                                csi = csi + 1
+                            if not already_c:
+                                defs.append(c_ns)
+                        c_is: Schema | None = cf.item_schema
+                        if c_is != None:
+                            already_cis: bool = False
+                            csi2: int = 0
+                            while csi2 < len(defs):
+                                if defs[csi2].name == c_is.name:
+                                    already_cis = True
+                                csi2 = csi2 + 1
+                            if not already_cis:
+                                defs.append(c_is)
+                        c_us: UnionSchema | None = cf.union_schema
+                        if c_us != None:
+                            already_cus: bool = False
+                            cui: int = 0
+                            while cui < len(union_defs):
+                                if union_defs[cui].name == c_us.name:
+                                    already_cus = True
+                                cui = cui + 1
+                            if not already_cus:
+                                union_defs.append(c_us)
+                        c_iu: UnionSchema | None = cf.item_union
+                        if c_iu != None:
+                            already_ciu: bool = False
+                            cui2: int = 0
+                            while cui2 < len(union_defs):
+                                if union_defs[cui2].name == c_iu.name:
+                                    already_ciu = True
+                                cui2 = cui2 + 1
+                            if not already_ciu:
+                                union_defs.append(c_iu)
+                        cfi = cfi + 1
+                    q_idx = q_idx + 1
+
+            if len(defs) > 0 or len(union_defs) > 0:
+                w.write_key("$defs")
+                w.begin_object()
+                sdi: int = 0
+                while sdi < len(defs):
+                    sub_s: Schema = defs[sdi]
+                    w.write_key(sub_s.name)
+                    sub_json: str = sub_s.to_json_schema(False)
+                    sub_val: JsonValue = nox.json.parse(sub_json)
+                    w.write_value(sub_val)
+                    sdi = sdi + 1
+                udi: int = 0
+                while udi < len(union_defs):
+                    sub_u: UnionSchema = union_defs[udi]
+                    w.write_key(sub_u.name)
+                    sub_ujson: str = sub_u.to_json_schema(False)
+                    sub_uval: JsonValue = nox.json.parse(sub_ujson)
+                    w.write_value(sub_uval)
+                    udi = udi + 1
+                w.end_object()
+
+        w.write_key("oneOf")
+        w.begin_array()
+        ti1: int = 0
+        while ti1 < len(self.variant_tags):
+            v_schema: Schema = self.variants[self.variant_tags[ti1]]
+            w.begin_object()
+            w.write_key("$ref")
+            w.write_string("#/$defs/" + v_schema.name)
+            w.end_object()
+            ti1 = ti1 + 1
+        w.end_array()
+
+        w.write_key("discriminator")
+        w.begin_object()
+        w.write_key("propertyName")
+        w.write_string(self.discriminator)
+        w.write_key("mapping")
+        w.begin_object()
+        ti2: int = 0
+        while ti2 < len(self.variant_tags):
+            tag_k: str = self.variant_tags[ti2]
+            v_map_s: Schema = self.variants[tag_k]
+            w.write_key(tag_k)
+            w.write_string("#/$defs/" + v_map_s.name)
+            ti2 = ti2 + 1
+        w.end_object()
+        w.end_object()
 
         w.end_object()
         return w.build()

@@ -24,20 +24,17 @@ This document tracks the phased development and future releases of **Noxen**.
 * [x] Coercion modes (`COERCION_STRICT` vs `COERCION_LAX`).
 * [x] Benchmarks suite (640k - 1M+ ops/sec).
 
-### Phase 4 — Security Hardening & Constraints (`v0.3.0` – `v0.7.2`)
-* [x] ISO 8601 Date, Time, and Datetime validators (`.date()`, `.time()`, `.datetime()`).
-* [x] Sensitive field masking and redaction (`.secret()`).
-* [x] Unknown fields preservation policy (`POLICY_ALLOW`).
-* [x] JSON Schema Draft 2020-12 reusable definitions with `$defs` and `$ref`.
-* [x] Adversarial fuzz and boundary test suite (`tests/fuzz/fuzz_test.nox`).
-* [x] Bidirectional model serialization (`BidirectionalModel[T]`).
-* [x] Automatic schema derivation via `auto_schema("ClassName")` using `nox.reflect`.
-* [x] Strict RFC 8259 non-finite float serialization rejection (`NaN`, `Infinity`, `-Infinity`).
-* [x] Serializer internal state non-mutation on failed validations (`_record_key` deferred until validation succeeds).
-* [x] Exact IEEE 754 negative zero (`-0.0`) sign preservation across JSON serialization and round-trip re-parsing.
-* [x] Cycle & recursion detection in schema derivation (`ValueError` on self-referential models).
-* [x] Dual-backend (LLVM vs QBE) verification with 100% structured semantic parity markers across all 10 targets.
-* [x] Complete cross-platform CI matrix on Ubuntu, macOS, and Windows.
+### Phase 4 — Security Hardening & Constraints (`v0.3.0` – `v0.9.0`)
+* [x] ISO 8601 Date, Time, and Datetime validators (`.date()`, `.time()`, `.datetime()`), `nox.regex` full-match engine, TOML/YAML support, and multiple-inheritance Mixins.
+
+### Phase 5 — Nox 2.1.186 Precision, Ergonomics & Multi-Protocol Adapters (`v0.10.0` – `v0.11.0`)
+* [x] Signed 64-bit integers + opt-in `.safe_int53()` guard & single-pass object field index in `Schema.validate_at`.
+* [x] Exact `Decimal` & `BigInt` support across schemas, bounds, scale checks, JSON serialization, and Draft 2020-12 output.
+* [x] `nox.unicode` string sanitizers/normalizers, `uuid7()`, `UUIDMixin.generate_v4/v7()`, and IANA `.timezone()` validator.
+* [x] Discriminated `UnionSchema` (`oneOf` + `discriminator`) and exhaustive `enum ValidationOutcome[T]`.
+* [x] `@dataclass` & class-level metadata decorators via `nox.reflect`.
+* [x] `yield`-based `stream_ndjson()` generators, RFC 4180 `csv_adapter.nox`, enhanced `nox.web` HTTP helpers, `nox.property` shrinking tests, and `wasm32-wasi` core verification.
+* [x] Optional standalone `yyjson_adapter.nox`, `pcre2_adapter.nox`, and binary `protobuf_adapter.nox`.
 
 ---
 

@@ -1,0 +1,107 @@
+# property_shrinking_test.nox — Seeded, shrinking property-based tests using nox.property.
+
+import nox.test
+import nox.property
+import nox.decimal
+import nox.bigint
+import schema
+import core
+from nox.property import Rng, PropertyFailed
+from nox.decimal import Decimal
+from nox.bigint import BigInt
+from schema import Schema
+from core import ValidatedData, ValidationResult
+
+_int64_schema: Schema = Schema("Int64Prop")
+_int64_schema.field_int("small")
+_int64_schema.field_int("wide")
+
+def prop_int64_roundtrip(r: Rng) -> bool:
+    s_val: int = r.int_range(-1000000, 1000000)
+    # Construct deterministic signed 64-bit magnitude exceeding 2^53 when r.size grows
+    wide_val: int = 9007199254740992 + r.int_range(1, 1000000)
+    if not r.boolean():
+        wide_val = 0 - wide_val
+    payload: str = "{\"small\": " + str(s_val) + ", \"wide\": " + str(wide_val) + "}"
+    vr: ValidationResult = _int64_schema.validate_json(payload)
+    if not vr.is_valid:
+        return False
+    dumped: str = _int64_schema.dump(vr.data)
+    vr2: ValidationResult = _int64_schema.validate_json(dumped)
+    if not vr2.is_valid:
+        return False
+    if vr2.data.get_int("small") != s_val or vr2.data.get_int("wide") != wide_val:
+        return False
+    vr_mem: ValidationResult = _int64_schema.validate_data(vr2.data)
+    return vr_mem.is_valid
+
+_dec_schema: Schema = Schema("DecimalProp")
+_dec_schema.field_decimal("amount").decimal_places(2)
+_dec_schema.field_bigint("ledger_id")
+
+def prop_decimal_bigint_roundtrip(r: Rng) -> bool:
+    whole: int = r.int_range(-50000, 50000)
+    cents: int = r.int_range(0, 99)
+    cents_str: str = str(cents)
+    if cents < 10:
+        cents_str = "0" + cents_str
+    sign_prefix: str = ""
+    raw_whole: int = whole
+    if whole < 0:
+        sign_prefix = "-"
+        raw_whole = 0 - whole
+    dec_str: str = sign_prefix + str(raw_whole) + "." + cents_str
+    big_str: str = str(r.int_range(1, 9)) + "9999999999999999999" + str(r.int_range(10, 99))
+
+    payload: str = "{\"amount\": \"" + dec_str + "\", \"ledger_id\": \"" + big_str + "\"}"
+    vr: ValidationResult = _dec_schema.validate_json(payload)
+    if not vr.is_valid:
+        return False
+    dumped: str = _dec_schema.dump(vr.data)
+    vr2: ValidationResult = _dec_schema.validate_json(dumped)
+    if not vr2.is_valid:
+        return False
+    expected_dec: Decimal = nox.decimal.parse(dec_str)
+    expected_big: BigInt = nox.bigint.parse(big_str)
+    return vr2.data.get_decimal("amount") == expected_dec and vr2.data.get_bigint("ledger_id") == expected_big
+
+_str_schema: Schema = Schema("StrParityProp")
+_str_schema.field_str("name").strip().min_length(1).max_length(120)
+_str_schema.field_bool("flag")
+
+def prop_string_parity(r: Rng) -> bool:
+    raw: str = r.ascii_str(80)
+    if len(raw) == 0:
+        raw = "a"
+    padded: str = "  " + raw + " "
+    flag: bool = r.boolean()
+    f_str: str = "false"
+    if flag:
+        f_str = "true"
+    payload: str = "{\"name\": \"" + padded + "\", \"flag\": " + f_str + "}"
+    vr: ValidationResult = _str_schema.validate_json(payload)
+    if not vr.is_valid:
+        return False
+    if vr.data.get_str("name") != raw:
+        return False
+    vr_mem: ValidationResult = _str_schema.validate_data(vr.data)
+    return vr_mem.is_valid
+
+def prop_intentional_threshold_failure(r: Rng) -> bool:
+    # Guaranteed to fail once r.size reaches 20 (verifies shrinking finds small counterexample)
+    return r.size < 20
+
+nox.property.check("int64_roundtrip", prop_int64_roundtrip, 120, 4242, 100)
+nox.property.check("decimal_bigint_roundtrip", prop_decimal_bigint_roundtrip, 120, 7777, 100)
+nox.property.check("string_parity", prop_string_parity, 120, 9999, 100)
+
+shrunk_caught: bool = False
+try:
+    nox.property.check("shrinking_check", prop_intentional_threshold_failure, 100, 12345, 100)
+except PropertyFailed as pf:
+    shrunk_caught = True
+    nox.test.assert_true(pf.size == 20, "nox.property shrunk counterexample to exact minimal size 20")
+    nox.test.assert_true(not nox.property.replay(prop_intentional_threshold_failure, pf.seed, pf.size), "replay reproduces failure deterministically")
+
+nox.test.assert_true(shrunk_caught, "PropertyFailed raised on failing invariant")
+print("property_shrinking_test passed")

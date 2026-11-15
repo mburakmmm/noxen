@@ -1,7 +1,11 @@
 # serialization.nox — Controlled model serialization to JSON.
 
 import nox.json
+import nox.decimal
+import nox.bigint
 from nox.json import JsonWriter, JsonValue
+from nox.decimal import Decimal
+from nox.bigint import BigInt
 import core
 from core import ValidatedData
 
@@ -107,6 +111,32 @@ class Serializer:
             self._w.write_null()
         else:
             self._w.write_bool(v)
+
+    def decimal(self: Serializer, k: str, v: Decimal) -> None:
+        self._record_key(k)
+        self._w.write_key(k)
+        self._w.write_string(str(v))
+
+    def opt_decimal(self: Serializer, k: str, v: Decimal | None) -> None:
+        self._record_key(k)
+        self._w.write_key(k)
+        if v is None:
+            self._w.write_null()
+        else:
+            self._w.write_string(str(v))
+
+    def bigint(self: Serializer, k: str, v: BigInt) -> None:
+        self._record_key(k)
+        self._w.write_key(k)
+        self._w.write_string(v.to_str())
+
+    def opt_bigint(self: Serializer, k: str, v: BigInt | None) -> None:
+        self._record_key(k)
+        self._w.write_key(k)
+        if v is None:
+            self._w.write_null()
+        else:
+            self._w.write_string(v.to_str())
 
     def list_str(self: Serializer, k: str, items: list[str]) -> None:
         self._record_key(k)

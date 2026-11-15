@@ -1,8 +1,9 @@
 # tests/integration/http_adapter_test.nox
-# Verifies nox.http and Aether HTTP adapter request validation and 422 error generation.
+# Verifies nox.http, nox.web header inspection, and HTTP adapter request validation / 400 / 415 / 422 / 200 / 201 responses.
 
 import nox.test
 import nox.http
+import nox.json
 from nox.http import HttpRequest, HttpResponse
 import schema
 import models
@@ -11,7 +12,7 @@ import http_adapter
 from schema import Schema
 from models import ModelSchema
 from core import ValidatedData, Result
-from http_adapter import json_200, json_422
+from http_adapter import json_200, json_201, json_400, json_415, json_422, is_json_content_type, validate_request, HttpModelAdapter
 
 class LoginDto:
     email: str
@@ -29,26 +30,55 @@ def make_login(d: ValidatedData) -> LoginDto:
     return LoginDto(d.get_str("email"), d.get_str("password"))
 
 login_model: ModelSchema[LoginDto] = ModelSchema[LoginDto](login_schema, make_login)
+login_http: HttpModelAdapter[LoginDto] = HttpModelAdapter[LoginDto](login_model)
 
-# 1. Valid HTTP Request
-req_ok: HttpRequest = HttpRequest("POST", "/api/login", "{\"email\":\"user@example.com\",\"password\":\"SecurePass123!\"}", {}, "127.0.0.1:8080")
-res_ok: Result[LoginDto] = login_model.parse_json(req_ok.body)
+def on_valid_login(dto: LoginDto) -> HttpResponse:
+    return json_200("{\"status\":\"authenticated\",\"email\":\"" + dto.email + "\"}")
 
+# 1. Valid HTTP Request with Content-Type charset variation (case-insensitive header via nox.web)
+req_ok: HttpRequest = HttpRequest(
+    "POST",
+    "/api/login",
+    "{\"email\":\"user@example.com\",\"password\":\"SecurePass123!\"}",
+    {"content-type": "application/json; charset=utf-8"},
+    "127.0.0.1:8080"
+)
+nox.test.assert_true(is_json_content_type(req_ok), "case-insensitive JSON content-type recognized")
+res_ok: Result[LoginDto] = login_http.parse(req_ok)
 nox.test.assert_true(res_ok.is_ok, "valid HTTP body passes")
 dto: LoginDto = res_ok.unwrap()
 nox.test.assert_eq_str(dto.email, "user@example.com", "email extracted")
-resp_ok: HttpResponse = json_200("{\"status\":\"authenticated\"}")
-nox.test.assert_eq_int(resp_ok.status, 200, "status is 200")
 
-# 2. Invalid HTTP Request (invalid email and short password)
+resp_handled_ok: HttpResponse = login_http.handle_json(req_ok, on_valid_login, True)
+nox.test.assert_eq_int(resp_handled_ok.status, 200, "handle_json returns 200 on valid JSON + Content-Type")
+
+# 2. Invalid Content-Type -> 415 Unsupported Media Type
+req_wrong_ct: HttpRequest = HttpRequest(
+    "POST",
+    "/api/login",
+    "{\"email\":\"user@example.com\",\"password\":\"SecurePass123!\"}",
+    {"Content-Type": "text/plain"},
+    "127.0.0.1:8080"
+)
+nox.test.assert_true(not is_json_content_type(req_wrong_ct), "text/plain rejected as non-JSON content-type")
+resp_415: HttpResponse = login_http.handle_json(req_wrong_ct, on_valid_login, True)
+nox.test.assert_eq_int(resp_415.status, 415, "wrong Content-Type returns 415")
+
+vr_ct_err: core.ValidationResult = validate_request(login_schema, req_wrong_ct, True)
+nox.test.assert_true(not vr_ct_err.is_valid, "validate_request rejects wrong Content-Type when required")
+
+# 3. Invalid HTTP Request -> 422 Unprocessable Entity
 req_bad: HttpRequest = HttpRequest("POST", "/api/login", "{\"email\":\"not-an-email\",\"password\":\"short\"}", {}, "127.0.0.1:8080")
-res_bad: Result[LoginDto] = login_model.parse_json(req_bad.body)
+resp_422: HttpResponse = login_http.handle_json(req_bad, on_valid_login, False)
+nox.test.assert_eq_int(resp_422.status, 422, "invalid body returns 422 Unprocessable Entity")
+nox.test.assert_true(len(resp_422.body) > 0, "422 response body produced")
 
-nox.test.assert_true(not res_bad.is_ok, "invalid HTTP body fails")
-nox.test.assert_eq_int(len(res_bad.errors), 2, "2 validation errors")
-
-resp_err: HttpResponse = json_422(res_bad.errors)
-nox.test.assert_eq_int(resp_err.status, 422, "status is 422 Unprocessable Entity")
-nox.test.assert_true(len(resp_err.body) > 0, "422 response body produced")
+# 4. json_400 & json_201 helpers produce valid JSON
+resp_400: HttpResponse = json_400("Missing token")
+nox.test.assert_eq_int(resp_400.status, 400, "json_400 status is 400")
+nox.test.assert_true(nox.json.is_object(nox.json.parse(resp_400.body)), "json_400 body is valid JSON")
+resp_201: HttpResponse = json_201("{\"id\":\"u1\"}")
+nox.test.assert_eq_int(resp_201.status, 201, "json_201 status is 201")
+nox.test.assert_eq_int(json_415().status, 415, "json_415 status is 415")
 
 print("http_adapter_test passed")

@@ -1,11 +1,31 @@
-# http_adapter.nox — HTTP adapter for nox.http and Aether responses.
+# http_adapter.nox — HTTP adapter for nox.http, nox.web, and Aether/Nyx responses.
 
 import nox.http
-from nox.http import HttpResponse
-import errors
-from errors import FieldError
+import nox.web
+import nox.strings
 import nox.json
+import errors
+import core
+import schema
+import models
+from nox.http import HttpRequest, HttpResponse
 from nox.json import JsonWriter
+from errors import FieldError
+from core import ValidationResult, Result, ValidationOutcome
+from schema import Schema
+from models import ModelSchema
+
+def _json_error_body(error_name: str, code: str, message: str) -> str:
+    w: JsonWriter = JsonWriter()
+    w.begin_object()
+    w.write_key("error")
+    w.write_string(error_name)
+    w.write_key("code")
+    w.write_string(code)
+    w.write_key("message")
+    w.write_string(message)
+    w.end_object()
+    return w.build()
 
 def json_422(errs: list[FieldError]) -> HttpResponse:
     w: JsonWriter = JsonWriter()
@@ -38,6 +58,14 @@ def json_422(errs: list[FieldError]) -> HttpResponse:
     headers: dict[str, str] = {"Content-Type": "application/json"}
     return HttpResponse(422, w.build(), headers)
 
+def json_400(message: str, code: str = "bad_request") -> HttpResponse:
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    return HttpResponse(400, _json_error_body("BadRequest", code, message), headers)
+
+def json_415(expected_ct: str = "application/json") -> HttpResponse:
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    return HttpResponse(415, _json_error_body("UnsupportedMediaType", "unsupported_media_type", "Expected Content-Type: " + expected_ct), headers)
+
 def json_200(body_json: str) -> HttpResponse:
     headers: dict[str, str] = {"Content-Type": "application/json"}
     return HttpResponse(200, body_json, headers)
@@ -45,3 +73,43 @@ def json_200(body_json: str) -> HttpResponse:
 def json_201(body_json: str) -> HttpResponse:
     headers: dict[str, str] = {"Content-Type": "application/json"}
     return HttpResponse(201, body_json, headers)
+
+def is_json_content_type(req: HttpRequest) -> bool:
+    ct_raw: str = nox.web.header(req, "Content-Type")
+    if len(ct_raw) == 0:
+        return False
+    parts: list[str] = nox.strings.split(ct_raw, ";")
+    media_type: str = nox.strings.lower(nox.strings.trim(parts[0]))
+    return media_type == "application/json" or media_type == "text/json" or nox.strings.ends_with(media_type, "+json")
+
+def request_body(req: HttpRequest) -> str:
+    return req.body
+
+def validate_request(s: Schema, req: HttpRequest, require_json_ct: bool = False) -> ValidationResult:
+    if require_json_ct and not is_json_content_type(req):
+        errs: list[FieldError] = []
+        errs.append(FieldError("headers.Content-Type", "unsupported_media_type", "Expected JSON Content-Type header", "application/json", nox.web.header(req, "Content-Type")))
+        return ValidationResult(False, core.ValidatedData(), errs)
+    return s.validate_json(req.body)
+
+class HttpModelAdapter[T]:
+    model: ModelSchema[T]
+
+    def __init__(self, model: ModelSchema[T]) -> None:
+        self.model = model
+
+    def parse(self, req: HttpRequest) -> Result[T]:
+        return self.model.parse_json(request_body(req))
+
+    def parse_outcome(self, req: HttpRequest) -> ValidationOutcome[T]:
+        return self.model.parse_outcome_json(request_body(req))
+
+    def handle_json(self, req: HttpRequest, handler: (T) -> HttpResponse, require_content_type: bool = False) -> HttpResponse:
+        if require_content_type and not is_json_content_type(req):
+            return json_415("application/json")
+        outcome: ValidationOutcome[T] = self.model.parse_outcome_json(request_body(req))
+        match outcome:
+            case ValidationOutcome.Ok(val):
+                return handler(val)
+            case ValidationOutcome.Err(errs):
+                return json_422(errs)

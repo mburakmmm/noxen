@@ -1,0 +1,99 @@
+# pcre2_adapter.nox — Optional desktop Perl-compatible / JIT-compiled regex adapter powered by nox.pcre2.
+#
+# STANDALONE OPTIONAL ADAPTER:
+# This module is NEVER imported by core `noxen.nox` or `schema.nox` because `nox.pcre2` links against
+# desktop `noxclibs.a` (and JIT uses the `dynamic_code` capability) and is unavailable on WebAssembly
+# (`wasm32-wasi`) and mobile targets. Use built-in `Field.regex(...)` (`nox.regex`) when portability is required.
+
+import nox.pcre2
+import core
+import errors
+from nox.pcre2 import Pcre2, Match, Pcre2Error, IGNORECASE, MULTILINE, DOTALL, EXTENDED, BYTES
+from core import ValidatedData
+from errors import FieldError, CODE_PATTERN_MISMATCH
+
+def pcre2_supported() -> bool:
+    return nox.pcre2.is_supported()
+
+def pcre2_jit_supported() -> bool:
+    return nox.pcre2.jit_supported()
+
+class CompiledPcre2Pattern:
+    pattern: str
+    flags: int
+    jit: bool
+    regex: Pcre2
+
+    def __init__(self: CompiledPcre2Pattern, pattern: str, flags: int = 0, jit: bool = True) -> None:
+        self.pattern = pattern
+        self.flags = flags
+        self.jit = jit
+        self.regex = nox.pcre2.compile(pattern, flags, jit)
+
+    def is_jit(self: CompiledPcre2Pattern) -> bool:
+        return self.regex.is_jit()
+
+    def is_match(self: CompiledPcre2Pattern, text: str) -> bool:
+        return self.regex.is_match(text)
+
+    def is_full_match(self: CompiledPcre2Pattern, text: str) -> bool:
+        return self.regex.is_full_match(text)
+
+    def search(self: CompiledPcre2Pattern, text: str) -> Match | None:
+        return self.regex.search(text)
+
+    def match(self: CompiledPcre2Pattern, text: str) -> Match | None:
+        return self.regex.match(text)
+
+    def full_match(self: CompiledPcre2Pattern, text: str) -> Match | None:
+        return self.regex.full_match(text)
+
+    def check_value(self: CompiledPcre2Pattern, path: str, val: str, message: str = "", is_secret: bool = False) -> list[FieldError]:
+        errs: list[FieldError] = []
+        actual_repr: str = val
+        if is_secret:
+            actual_repr = "[REDACTED]"
+        matched: bool = False
+        err_msg: str = ""
+        try:
+            matched = self.regex.is_full_match(val)
+        except Pcre2Error as e:
+            err_msg = e.message
+
+        if len(err_msg) > 0:
+            errs.append(FieldError(path, CODE_PATTERN_MISMATCH, "PCRE2 match error on field '" + path + "': " + err_msg, "regex(" + self.pattern + ")", actual_repr))
+        elif not matched:
+            msg: str = message
+            if len(msg) == 0:
+                msg = "Field '" + path + "' failed PCRE2 pattern constraint"
+            errs.append(FieldError(path, CODE_PATTERN_MISMATCH, msg, "regex(" + self.pattern + ")", actual_repr))
+        return errs
+
+    def check_field(self: CompiledPcre2Pattern, data: ValidatedData, field_name: str, message: str = "", is_secret: bool = False) -> list[FieldError]:
+        if not data.has_str(field_name):
+            return []
+        return self.check_value(field_name, data.get_str(field_name), message, is_secret)
+
+    # Returns a Schema.add_validator-compatible hook capturing this pre-compiled (optionally JIT) pattern.
+    def validator(self: CompiledPcre2Pattern, field_name: str, message: str = "", is_secret: bool = False) -> (ValidatedData) -> list[FieldError]:
+        compiled: CompiledPcre2Pattern = self
+        fname: str = field_name
+        msg: str = message
+        sec: bool = is_secret
+        def _hook(d: ValidatedData) -> list[FieldError]:
+            return compiled.check_field(d, fname, msg, sec)
+        return _hook
+
+def compile_pcre2_pattern(pattern: str, flags: int = 0, jit: bool = True) -> CompiledPcre2Pattern:
+    return CompiledPcre2Pattern(pattern, flags, jit)
+
+def compile_pcre2_validator(field_name: str, pattern: str, message: str = "", flags: int = 0, jit: bool = True, is_secret: bool = False) -> (ValidatedData) -> list[FieldError]:
+    compiled: CompiledPcre2Pattern = CompiledPcre2Pattern(pattern, flags, jit)
+    return compiled.validator(field_name, message, is_secret)
+
+def pcre2_full_match_ok(pattern: str, text: str, flags: int = 0) -> bool:
+    try:
+        rx: Pcre2 = nox.pcre2.compile(pattern, flags, False)
+        return rx.is_full_match(text)
+    except Pcre2Error as e:
+        return False

@@ -1,0 +1,81 @@
+# yyjson_adapter_test.nox — Tests optional desktop high-speed nox.yyjson strict, relaxed, and JSON5 validation.
+
+import nox.test
+import nox.decimal
+import schema
+import core
+import models
+import errors
+import yyjson_adapter
+from nox.decimal import Decimal
+from schema import Schema, auto_schema
+from core import ValidatedData, ValidationResult, Result, ValidationOutcome
+from models import ModelSchema
+from errors import CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE, CODE_INVALID_JSON, CODE_TYPE_MISMATCH
+from yyjson_adapter import yyjson_supported, validate_yyjson, validate_yyjson_relaxed, validate_yyjson5, YyjsonModel
+
+@dataclass
+@field_bounds("count", 1, 1000000)
+@field_bounds("price", "0.01", "9999.99")
+@field_strip("label")
+class FastItem:
+    id: int
+    label: str
+    count: int
+    price: Decimal
+    active: bool
+
+def make_fast_item(d: ValidatedData) -> FastItem:
+    return FastItem(d.get_int("id"), d.get_str("label"), d.get_int("count"), d.get_decimal("price"), d.get_bool("active"))
+
+def test_yyjson_adapter() -> None:
+    nox.test.assert_true(yyjson_supported(), "yyjson C library available on desktop host")
+    s: Schema = auto_schema("FastItem")
+
+    # 1. Strict JSON with 64-bit integer (> 2^53) and Decimal
+    raw_strict: str = "{\"id\": 9007199254740993, \"label\": \"  Widget Pro \", \"count\": 5, \"price\": \"49.95\", \"active\": true}"
+    vr: ValidationResult = validate_yyjson(s, raw_strict)
+    nox.test.assert_true(vr.is_valid, "yyjson validates strict payload with 64-bit int")
+    nox.test.assert_eq_int(vr.data.get_int("id"), 9007199254740993, "64-bit int preserved via yyjson")
+    nox.test.assert_eq_str(vr.data.get_str("label"), "Widget Pro", "string sanitizer applied via yyjson")
+    nox.test.assert_true(vr.data.get_decimal("price") == nox.decimal.parse("49.95"), "Decimal exact via yyjson")
+
+    # 2. Strict yyjson rejects comments; relaxed yyjson accepts comments & trailing comma
+    raw_relaxed: str = "{ // comment\n \"id\": 42, \"label\": \"Cfg\", \"count\": 10, \"price\": \"1.50\", \"active\": true, }"
+    vr_strict_fail: ValidationResult = validate_yyjson(s, raw_relaxed)
+    nox.test.assert_true(not vr_strict_fail.is_valid, "strict yyjson rejects comment/trailing comma")
+    nox.test.assert_eq_str(vr_strict_fail.errors[0].code, CODE_INVALID_JSON, "strict yyjson reports invalid_json")
+
+    vr_relaxed_ok: ValidationResult = validate_yyjson_relaxed(s, raw_relaxed)
+    nox.test.assert_true(vr_relaxed_ok.is_valid, "relaxed yyjson accepts comments & trailing comma")
+
+    # 3. JSON5 support (unquoted keys, single quotes, hex integer)
+    raw_json5: str = "{ id: 0x10, label: 'HexItem', count: 3, price: '9.99', active: false, }"
+    vr_json5: ValidationResult = validate_yyjson5(s, raw_json5)
+    nox.test.assert_true(vr_json5.is_valid, "JSON5 unquoted keys/single quotes/hex int accepted")
+    nox.test.assert_eq_int(vr_json5.data.get_int("id"), 16, "JSON5 hex literal decoded to 16")
+
+    # 4. POLICY_FORBID + bounds enforcement via YyjsonModel[T]
+    ms: ModelSchema[FastItem] = ModelSchema[FastItem](s, make_fast_item)
+    ym: YyjsonModel[FastItem] = YyjsonModel[FastItem](ms)
+    out: ValidationOutcome[FastItem] = ym.parse_outcome_json5(raw_json5)
+    match out:
+        case ValidationOutcome.Ok(item):
+            nox.test.assert_eq_str(item.label, "HexItem", "YyjsonModel parsed typed instance")
+        case ValidationOutcome.Err(_):
+            nox.test.assert_true(False, "expected Ok outcome from YyjsonModel")
+
+    r_extra: Result[FastItem] = ym.parse("{\"id\": 1, \"label\": \"A\", \"count\": 0, \"price\": \"1.00\", \"active\": true, \"unknown\": 1}")
+    nox.test.assert_true(not r_extra.is_ok, "unknown field + count=0 rejected")
+    nox.test.assert_eq_str(r_extra.errors[0].code, CODE_EXTRA_FIELD, "POLICY_FORBID enforced via yyjson")
+    nox.test.assert_eq_str(r_extra.errors[1].code, CODE_OUT_OF_RANGE, "int bounds enforced via yyjson")
+
+    # 5. Parity check: safe_int53 also enforced via yyjson
+    s53: Schema = Schema("JS53")
+    s53.field_int("id").safe_int53()
+    vr53: ValidationResult = validate_yyjson(s53, "{\"id\": 9007199254740992}")
+    nox.test.assert_true(not vr53.is_valid, "safe_int53 rejected via yyjson")
+    nox.test.assert_eq_str(vr53.errors[0].code, CODE_TYPE_MISMATCH, "safe_int53 emits type_mismatch")
+
+test_yyjson_adapter()
+print("yyjson_adapter_test passed")

@@ -1,0 +1,48 @@
+# enum_decimal_dataclass.nox — Showcases Nox 2.1.186 ergonomics in Noxen: @dataclass, class decorators, Decimal, BigInt, ValidationOutcome match/case, UUID7, timezone, and NDJSON streaming.
+
+import nox.decimal
+import nox.uuid
+import schema
+import core
+import models
+from nox.decimal import Decimal
+from schema import Schema, auto_schema
+from core import ValidatedData, ValidationResult, ValidationOutcome
+from models import ModelSchema
+
+@dataclass
+@schema_policy("forbid")
+@field_bounds("amount", "0.01", "1000000.00")
+@field_decimal_scale("amount", 10, 2)
+@field_format("request_id", "uuid7")
+@field_format("tz", "timezone")
+@field_strip("currency")
+@field_upper("currency")
+@field_choices("currency", ["USD", "EUR", "TRY"])
+class LedgerTx:
+    request_id: str
+    tz: str
+    currency: str
+    amount: Decimal
+
+def make_tx(d: ValidatedData) -> LedgerTx:
+    return LedgerTx(d.get_str("request_id"), d.get_str("tz"), d.get_str("currency"), d.get_decimal("amount"))
+
+def run_demo() -> None:
+    s: Schema = auto_schema("LedgerTx")
+    ms: ModelSchema[LedgerTx] = ModelSchema[LedgerTx](s, make_tx)
+    uid7: str = nox.uuid.uuid7()
+
+    stream_payload: str = (
+        "{\"request_id\": \"" + uid7 + "\", \"tz\": \"UTC\", \"currency\": \"  try \", \"amount\": \"149.90\"}\n" +
+        "{\"request_id\": \"not-uuid7\", \"tz\": \"UTC\", \"currency\": \"USD\", \"amount\": \"0.00\"}\n"
+    )
+
+    for outcome in ms.stream_ndjson_outcomes(stream_payload):
+        match outcome:
+            case ValidationOutcome.Ok(tx):
+                print("VALID TX:", tx.currency, tx.amount, tx.tz)
+            case ValidationOutcome.Err(errs):
+                print("REJECTED TX errors:", len(errs), "first code:", errs[0].code)
+
+run_demo()

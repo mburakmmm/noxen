@@ -1,0 +1,128 @@
+# protobuf_adapter_test.nox — Tests binary nox.protobuf encoding/decoding + Schema validation round-trip.
+
+import nox.test
+import nox.protobuf
+import nox.decimal
+import nox.bigint
+import schema
+import core
+import errors
+import models
+import protobuf_adapter
+from nox.protobuf import Writer
+from nox.decimal import Decimal
+from nox.bigint import BigInt
+from schema import Schema, auto_schema, POLICY_IGNORE
+from core import ValidatedData, ValidationResult, Result, ValidationOutcome
+from errors import CODE_OUT_OF_RANGE, CODE_EXTRA_FIELD, CODE_INVALID_PROTOBUF, CODE_MISSING_FIELD, CODE_TYPE_MISMATCH
+from models import ModelSchema
+from protobuf_adapter import ProtoMapping, ProtoModelAdapter, WIRE_SINT, encode_proto, decode_proto
+
+@dataclass
+@field_bounds("zip_code", 1000, 999999)
+class ProtoAddr:
+    city: str
+    zip_code: int
+
+@dataclass
+@field_bounds("age", 18, 120)
+@field_bounds("balance", "0.00", "1000000.00")
+class ProtoUser:
+    id: int
+    name: str
+    age: int
+    balance: Decimal
+    ledger: BigInt
+    active: bool
+    address: ProtoAddr
+
+def make_proto_user(d: ValidatedData) -> ProtoUser:
+    ad: ValidatedData = d.get_object("address")
+    return ProtoUser(
+        d.get_int("id"),
+        d.get_str("name"),
+        d.get_int("age"),
+        d.get_decimal("balance"),
+        d.get_bigint("ledger"),
+        d.get_bool("active"),
+        ProtoAddr(ad.get_str("city"), ad.get_int("zip_code"))
+    )
+
+def unparse_proto_user(u: ProtoUser) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_int("id", u.id)
+    d.set_str("name", u.name)
+    d.set_int("age", u.age)
+    d.set_decimal("balance", u.balance)
+    d.set_bigint("ledger", u.ledger)
+    d.set_bool("active", u.active)
+    ad: ValidatedData = ValidatedData()
+    ad.set_str("city", u.address.city)
+    ad.set_int("zip_code", u.address.zip_code)
+    d.set_object("address", ad)
+    return d
+
+def test_protobuf_roundtrip_and_constraints() -> None:
+    s: Schema = auto_schema("ProtoUser")
+    mapping: ProtoMapping = ProtoMapping(s).auto_tags()
+
+    u: ProtoUser = ProtoUser(
+        9007199254740993,
+        "Ada Lovelace",
+        36,
+        nox.decimal.parse("12500.75"),
+        nox.bigint.parse("999999999999999999999999"),
+        True,
+        ProtoAddr("London", 10115)
+    )
+    ms: ModelSchema[ProtoUser] = ModelSchema[ProtoUser](s, make_proto_user)
+    adapter: ProtoModelAdapter[ProtoUser] = ProtoModelAdapter[ProtoUser](mapping, ms)
+
+    wire_bytes: list[int] = adapter.encode(u, unparse_proto_user)
+    nox.test.assert_true(len(wire_bytes) > 0, "encoded non-empty protobuf wire bytes")
+
+    out: ValidationOutcome[ProtoUser] = adapter.decode_outcome(wire_bytes)
+    match out:
+        case ValidationOutcome.Ok(decoded):
+            nox.test.assert_eq_int(decoded.id, 9007199254740993, "64-bit int preserved through protobuf")
+            nox.test.assert_eq_str(decoded.name, "Ada Lovelace", "string preserved")
+            nox.test.assert_true(decoded.balance == nox.decimal.parse("12500.75"), "Decimal preserved")
+            nox.test.assert_true(decoded.ledger == nox.bigint.parse("999999999999999999999999"), "BigInt preserved")
+            nox.test.assert_eq_str(decoded.address.city, "London", "nested message preserved")
+        case ValidationOutcome.Err(_):
+            nox.test.assert_true(False, "valid protobuf message decoded cleanly")
+
+    # Unknown tag rejection under POLICY_FORBID + invalid scalar constraint
+    w_bad: Writer = nox.protobuf.writer()
+    w_bad.varint(1, 5)
+    w_bad.string(2, "Bob")
+    w_bad.varint(3, 12) # violates age >= 18
+    w_bad.string(99, "unknown-tag")
+    vr_bad: ValidationResult = decode_proto(mapping, w_bad.to_bytes())
+    nox.test.assert_true(not vr_bad.is_valid, "invalid protobuf payload rejected")
+    nox.test.assert_eq_str(vr_bad.errors[0].code, CODE_EXTRA_FIELD, "unknown protobuf tag flagged as extra_field under POLICY_FORBID")
+
+    # Truncated wire payload produces CODE_INVALID_PROTOBUF
+    vr_trunc: ValidationResult = decode_proto(mapping, [18, 200])
+    nox.test.assert_true(not vr_trunc.is_valid, "truncated protobuf payload caught safely")
+    nox.test.assert_eq_str(vr_trunc.errors[0].code, CODE_INVALID_PROTOBUF, "truncated wire payload emits invalid_protobuf")
+
+    # Explicit sint + packed repeated varints schema
+    s_vec: Schema = Schema("SignedMetrics")
+    s_vec.field_int("delta").min_i(-1000).max_i(1000)
+    s_vec.field_list("buckets", "int").min_items(2)
+    m_vec: ProtoMapping = ProtoMapping(s_vec)
+    m_vec.map(1, "delta", WIRE_SINT)
+    m_vec.map(2, "buckets")
+
+    vd_vec: ValidatedData = ValidatedData()
+    vd_vec.set_int("delta", -420)
+    vd_vec.set_list_int("buckets", [10, 20, 30])
+    encoded_vec: list[int] = encode_proto(m_vec, vd_vec)
+    vr_vec: ValidationResult = decode_proto(m_vec, encoded_vec)
+    nox.test.assert_true(vr_vec.is_valid, "zigzag sint + packed varints valid roundtrip")
+    nox.test.assert_eq_int(vr_vec.data.get_int("delta"), -420, "negative zigzag sint decoded exactly")
+    nox.test.assert_eq_int(len(vr_vec.data.get_list_int("buckets")), 3, "packed repeated varints decoded")
+
+test_protobuf_roundtrip_and_constraints()
+print("protobuf_adapter_test passed")

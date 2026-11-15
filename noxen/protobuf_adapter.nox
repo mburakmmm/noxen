@@ -1,0 +1,2 @@
+import protobuf_adapter
+from protobuf_adapter import WIRE_DEFAULT, WIRE_VARINT, WIRE_SINT, WIRE_FIXED64, WIRE_FIXED32, WIRE_SFIXED32, WIRE_DOUBLE, WIRE_FLOAT32, WIRE_STRING, WIRE_BOOL, WIRE_DECIMAL, WIRE_BIGINT, WIRE_MESSAGE, ProtoFieldSpec, ProtoMapping, encode_proto, decode_proto, ProtoModelAdapter

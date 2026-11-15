@@ -5,8 +5,8 @@
 [![CI](https://github.com/mburakmmm/noxen/actions/workflows/ci.yml/badge.svg)](https://github.com/mburakmmm/noxen/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/mburakmmm/noxen?color=007ec6&label=release)](https://github.com/mburakmmm/noxen/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Nox Toolchain](https://img.shields.io/badge/noxc-2.0.63+-00bcd4.svg)](https://noxlang.com)
-[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-success.svg)](https://github.com/mburakmmm/noxen/actions)
+[![Nox Toolchain](https://img.shields.io/badge/noxc-2.1.186+-00bcd4.svg)](https://noxlang.com)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20WASM-success.svg)](https://github.com/mburakmmm/noxen/actions)
 [![JSON Schema](https://img.shields.io/badge/JSON%20Schema-Draft%202020--12-792ee5.svg)](https://json-schema.org)
 
 **Statically typed data modeling, parsing, validation, and high-performance serialization for the [Nox programming language](https://noxlang.com).**
@@ -75,9 +75,19 @@
 
 ## Minimum Requirements
 
-* **Compiler**: `noxc 2.0.63` or newer
-* **Backend**: LLVM (default) or QBE
-* **Platform**: macOS (ARM64/x64), Linux (x64/ARM64), Windows (x64)
+* **Compiler**: `noxc 2.1.186` or newer
+* **Backend**: LLVM (default) or QBE (`wasm32-wasi` supported for core `noxen`)
+* **Platform**: macOS (ARM64/x64), Linux (x64/ARM64), Windows (x64), WebAssembly (`wasm32-wasi` for core)
+
+### Highlights (v0.10.0 – v0.11.0 Additions)
+
+* **Full 64-Bit Integers + `.safe_int53()`**: Lossless `int64` JSON integer decoding (`nox.json.as_int`) with opt-in IEEE-754 53-bit JavaScript interoperability check.
+* **Exact `Decimal` & `BigInt` Support**: Fixed-decimal arithmetic (`decimal_places`, `max_digits`, exact bounds) and arbitrary-precision `BigInt` fields across validation, serialization, and Draft 2020-12 schema generation.
+* **`@dataclass` & Decorator Metadata**: Annotate standard `@dataclass` models with `@schema_policy`, `@field_bounds`, `@field_format`, `@field_strip`, `@field_regex`, `@field_alias`, `@field_secret`, `@field_decimal_scale`, etc., read automatically via `nox.reflect`.
+* **Discriminated Unions & `enum ValidationOutcome[T]`**: Tagged `UnionSchema` (`oneOf` + `discriminator`) and pattern-matched `ValidationOutcome.Ok` / `ValidationOutcome.Err` responses.
+* **Unicode & Domain Formats**: `nox.unicode` normalization (`NFC`/`NFD`/`NFKC`/`NFKD`), trimming/Turkish case helpers, `uuid7()`, and `timezone()` IANA checks.
+* **Lazy NDJSON & CSV / Protobuf / HTTP**: `yield`-based `stream_ndjson()`, RFC 4180 `csv_adapter.nox`, enhanced `nox.web` `HttpModelAdapter[T]`, and binary `protobuf_adapter.nox`.
+* **Optional Desktop High-Speed Adapters (Standalone)**: `yyjson_adapter.nox` (RFC 8259 / relaxed comments / JSON5; note: `yyjson` does not reject duplicate object keys — keep core `nox.json` for strict duplicate-key security) and `pcre2_adapter.nox` (JIT PCRE2 lookarounds, backreferences, named captures). Both are kept out of core `noxen.nox` to keep core WASM/mobile builds dependency-free.
 
 ---
 

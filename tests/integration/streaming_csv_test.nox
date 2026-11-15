@@ -1,0 +1,129 @@
+# streaming_csv_test.nox — Tests yield-based NDJSON streaming and nox.csv adapter integration.
+
+import nox.test
+import nox.decimal
+import schema
+import core
+import errors
+import models
+import csv_adapter
+from nox.decimal import Decimal
+from schema import Schema, POLICY_IGNORE, auto_schema
+from core import ValidatedData, ValidationResult, Result, ValidationOutcome
+from errors import CODE_OUT_OF_RANGE, CODE_INVALID_JSON, CODE_INVALID_CSV, CODE_TYPE_MISMATCH
+from models import Model, ModelSchema, BidirectionalModel
+from csv_adapter import validate_csv, stream_csv, dump_csv, CsvModelAdapter
+
+@dataclass
+@field_bounds("qty", 1, 1000)
+@field_bounds("unit_price", "0.01", "99999.99")
+@field_decimal_scale("unit_price", 8, 2)
+@field_strip("sku")
+class OrderLine:
+    sku: str
+    qty: int
+    unit_price: Decimal
+    express: bool
+
+def make_order_line(d: ValidatedData) -> OrderLine:
+    return OrderLine(d.get_str("sku"), d.get_int("qty"), d.get_decimal("unit_price"), d.get_bool("express"))
+
+def unparse_order_line(o: OrderLine) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_str("sku", o.sku)
+    d.set_int("qty", o.qty)
+    d.set_decimal("unit_price", o.unit_price)
+    d.set_bool("express", o.express)
+    return d
+
+def test_ndjson_streaming_generators() -> None:
+    s: Schema = auto_schema("OrderLine")
+    ndjson: str = (
+        "{\"sku\": \"  SKU-1  \", \"qty\": 2, \"unit_price\": \"19.99\", \"express\": true}\n" +
+        "\n" +
+        "{\"sku\": \"SKU-2\", \"qty\": 0, \"unit_price\": \"5.00\", \"express\": false}\n" +
+        "not-valid-json\n" +
+        "{\"sku\": \"SKU-3\", \"qty\": 5, \"unit_price\": \"3.50\", \"express\": true}\n"
+    )
+
+    # 1. Schema.stream_ndjson lazily yields each non-empty line
+    results: list[ValidationResult] = []
+    for vr in s.stream_ndjson(ndjson):
+        results.append(vr)
+
+    nox.test.assert_eq_int(len(results), 4, "4 non-empty NDJSON records yielded")
+    nox.test.assert_true(results[0].is_valid, "record 0 valid")
+    nox.test.assert_eq_str(results[0].data.get_str("sku"), "SKU-1", "record 0 stripped")
+    nox.test.assert_true(not results[1].is_valid, "record 1 invalid qty=0")
+    nox.test.assert_eq_str(results[1].errors[0].code, CODE_OUT_OF_RANGE, "record 1 out_of_range")
+    nox.test.assert_true(not results[2].is_valid, "record 2 malformed json")
+    nox.test.assert_eq_str(results[2].errors[0].code, CODE_INVALID_JSON, "record 2 invalid_json")
+    nox.test.assert_true(results[3].is_valid, "record 3 valid after prior error")
+
+    # 2. Typed BidirectionalModel streaming + early break test (true lazy Iterator[ValidationOutcome[T]])
+    ms_stream: ModelSchema[OrderLine] = ModelSchema[OrderLine](s, make_order_line)
+    bm: BidirectionalModel[OrderLine] = BidirectionalModel[OrderLine](ms_stream, unparse_order_line)
+    valid_skus: list[str] = []
+    err_count: int = 0
+    for outcome in bm.stream_ndjson_outcomes(ndjson):
+        match outcome:
+            case ValidationOutcome.Ok(item):
+                valid_skus.append(item.sku)
+            case ValidationOutcome.Err(errs):
+                err_count = err_count + 1
+    nox.test.assert_eq_int(len(valid_skus), 2, "2 typed models yielded as Ok")
+    nox.test.assert_eq_int(err_count, 2, "2 invalid lines yielded as Err")
+    nox.test.assert_eq_str(valid_skus[0], "SKU-1", "first yielded Ok matches")
+    nox.test.assert_eq_str(valid_skus[1], "SKU-3", "second yielded Ok matches")
+
+    # 3. Model.stream_ndjson_lines
+    m: Model = Model(s)
+    line_count: int = 0
+    for _mr in m.stream_ndjson_lines(["{\"sku\":\"A\",\"qty\":1,\"unit_price\":\"1.00\",\"express\":false}", ""]):
+        line_count = line_count + 1
+    nox.test.assert_eq_int(line_count, 1, "Model.stream_ndjson_lines skips empty line")
+
+def test_csv_adapter_stream_and_roundtrip() -> None:
+    s: Schema = auto_schema("OrderLine")
+    csv_input: str = (
+        "sku,qty,unit_price,express\n" +
+        "\"  ITEM-10 \",3,12.50,true\n" +
+        "ITEM-BAD,notanint,9.99,false\n" +
+        "ITEM-20,10,4.25,1\n"
+    )
+
+    res_list: list[ValidationResult] = validate_csv(s, csv_input)
+    nox.test.assert_eq_int(len(res_list), 3, "3 CSV data rows validated")
+    nox.test.assert_true(res_list[0].is_valid, "CSV row 0 valid")
+    nox.test.assert_eq_str(res_list[0].data.get_str("sku"), "ITEM-10", "CSV string trimmed")
+    nox.test.assert_true(res_list[0].data.get_decimal("unit_price") == nox.decimal.parse("12.50"), "CSV decimal exact")
+    nox.test.assert_true(res_list[0].data.get_bool("express"), "CSV bool true parsed")
+
+    nox.test.assert_true(not res_list[1].is_valid, "CSV row 1 invalid qty rejected")
+    nox.test.assert_eq_str(res_list[1].errors[0].code, CODE_TYPE_MISMATCH, "CSV int type_mismatch")
+    nox.test.assert_true(res_list[2].is_valid, "CSV row 2 valid")
+
+    # Typed CsvModelAdapter[T] roundtrip
+    ms: ModelSchema[OrderLine] = ModelSchema[OrderLine](s, make_order_line)
+    adapter: CsvModelAdapter[OrderLine] = CsvModelAdapter[OrderLine](ms)
+    valid_orders: list[OrderLine] = []
+    for out in adapter.parse_outcomes(csv_input):
+        match out:
+            case ValidationOutcome.Ok(ord):
+                valid_orders.append(ord)
+            case ValidationOutcome.Err(_):
+                pass
+    nox.test.assert_eq_int(len(valid_orders), 2, "2 typed OrderLine items parsed from CSV")
+    dumped_csv: str = adapter.dump(valid_orders, unparse_order_line)
+    revalidated: list[ValidationResult] = adapter.validate(dumped_csv)
+    nox.test.assert_eq_int(len(revalidated), 2, "roundtripped CSV has 2 rows")
+    nox.test.assert_true(revalidated[0].is_valid and revalidated[1].is_valid, "roundtripped CSV validates cleanly")
+
+    # Malformed CSV error
+    bad_csv_res: list[ValidationResult] = validate_csv(s, "sku,qty,unit_price,express\n\"unterminated,1,2.00,true")
+    nox.test.assert_eq_int(len(bad_csv_res), 1, "malformed CSV returns 1 error result")
+    nox.test.assert_eq_str(bad_csv_res[0].errors[0].code, CODE_INVALID_CSV, "malformed CSV uses CODE_INVALID_CSV")
+
+test_ndjson_streaming_generators()
+test_csv_adapter_stream_and_roundtrip()
+print("streaming_csv_test passed")

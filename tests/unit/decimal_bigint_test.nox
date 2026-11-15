@@ -1,0 +1,128 @@
+# decimal_bigint_test.nox — Exact Decimal and BigInt validation, constraints, round-trip, and JSON Schema tests.
+
+import nox.test
+import nox.decimal
+import nox.bigint
+import nox.json
+import schema
+import core
+import errors
+import models
+from nox.decimal import Decimal
+from nox.bigint import BigInt
+from schema import Schema
+from core import ValidationResult, ValidatedData
+from models import Model
+from errors import CODE_TYPE_MISMATCH, CODE_OUT_OF_RANGE
+
+def test_exact_decimal_validation_and_roundtrip() -> None:
+    s: Schema = Schema("Payment")
+    s.field_decimal("amount").min_dec(nox.decimal.parse("0.01")).max_dec(nox.decimal.parse("10000.00")).decimal_places(2).max_digits(8)
+    s.field_decimal("tax").default_dec(nox.decimal.parse("0.18"))
+
+    # Exact string representation (lossless, no float64 rounding)
+    r1: ValidationResult = s.validate_json("{\"amount\": \"19.99\"}")
+    nox.test.assert_true(r1.is_valid, "exact decimal string 19.99 passes")
+    nox.test.assert_true(r1.data.get_decimal("amount") == nox.decimal.parse("19.99"), "amount Decimal value matches")
+    nox.test.assert_true(r1.data.get_decimal("tax") == nox.decimal.parse("0.18"), "default decimal applied when missing")
+
+    # Classic float rounding pitfall 0.1 + 0.2 == 0.30000000000000004 avoided
+    s2: Schema = Schema("Ledger")
+    s2.field_decimal("a")
+    s2.field_decimal("b")
+    s2.field_decimal("total")
+    r_add: ValidationResult = s2.validate_json("{\"a\": \"0.1\", \"b\": \"0.2\", \"total\": \"0.3\"}")
+    nox.test.assert_true(r_add.is_valid, "ledger JSON parses exact decimals")
+    sum_dec: Decimal = r_add.data.get_decimal("a") + r_add.data.get_decimal("b")
+    nox.test.assert_true(sum_dec == r_add.data.get_decimal("total"), "Decimal 0.1 + 0.2 == 0.3 exactly")
+
+    # Round-trip via dump()
+    dumped: str = s.dump(r1.data)
+    rt: ValidationResult = s.validate_json(dumped)
+    nox.test.assert_true(rt.is_valid, "Decimal dump() round-trips cleanly")
+    nox.test.assert_true(rt.data.get_decimal("amount") == r1.data.get_decimal("amount"), "Decimal amount preserved bit-exact")
+
+    # JSON number input also accepted cleanly
+    r_num: ValidationResult = s.validate_json("{\"amount\": 42.5}")
+    nox.test.assert_true(r_num.is_valid, "JSON number 42.5 accepted as Decimal")
+
+    # Exceeds decimal_places(2)
+    r_dp: ValidationResult = s.validate_json("{\"amount\": \"12.345\"}")
+    nox.test.assert_true(not r_dp.is_valid, "12.345 rejected by decimal_places(2)")
+    nox.test.assert_eq_str(r_dp.errors[0].code, CODE_OUT_OF_RANGE, "decimal_places produces OUT_OF_RANGE")
+
+    # Trailing zeros still normalize cleanly (12.30 -> 1 place <= 2)
+    r_tz: ValidationResult = s.validate_json("{\"amount\": \"12.30\"}")
+    nox.test.assert_true(r_tz.is_valid, "12.30 accepted under decimal_places(2)")
+
+    # Exceeds max_digits(8): 9999999.99 is > 10000 anyway, test dedicated max_digits
+    sd: Schema = Schema("MaxDig")
+    sd.field_decimal("rate").decimal_places(4).max_digits(6)
+    r_md: ValidationResult = sd.validate_json("{\"rate\": \"123.4567\"}")
+    nox.test.assert_true(not r_md.is_valid, "123.4567 has 7 digits > max_digits(6)")
+    nox.test.assert_eq_str(r_md.errors[0].code, CODE_OUT_OF_RANGE, "max_digits produces OUT_OF_RANGE")
+
+    # Out of range min_dec / max_dec
+    r_min: ValidationResult = s.validate_json("{\"amount\": \"0.00\"}")
+    nox.test.assert_true(not r_min.is_valid, "0.00 < 0.01 rejected")
+    nox.test.assert_eq_str(r_min.errors[0].code, CODE_OUT_OF_RANGE, "min_dec produces OUT_OF_RANGE")
+
+    # Invalid decimal syntax rejected
+    r_bad: ValidationResult = s.validate_json("{\"amount\": \"not_a_decimal\"}")
+    nox.test.assert_true(not r_bad.is_valid, "Invalid decimal string rejected")
+    nox.test.assert_eq_str(r_bad.errors[0].code, CODE_TYPE_MISMATCH, "Invalid decimal produces TYPE_MISMATCH")
+
+    # validate_data parity
+    rd: ValidationResult = s.validate_data(r_dp.data)
+    vd_bad: ValidatedData = ValidatedData()
+    vd_bad.set_decimal("amount", nox.decimal.parse("12.345"))
+    rd_dp: ValidationResult = s.validate_data(vd_bad)
+    nox.test.assert_true(not rd_dp.is_valid, "validate_data rejects 12.345 decimal_places(2)")
+
+def test_exact_bigint_validation_and_roundtrip() -> None:
+    s: Schema = Schema("CryptoTx")
+    min_b: BigInt = nox.bigint.parse("100000000000000000000") # 10^20
+    max_b: BigInt = nox.bigint.parse("999999999999999999999999999999") # 10^30 - 1
+    s.field_bigint("wei").min_big(min_b).max_big(max_b)
+    s.field_bigint("nonce").default_big(nox.bigint.parse("0"))
+
+    huge: str = "12345678901234567890123456789"
+    r1: ValidationResult = s.validate_json("{\"wei\": \"" + huge + "\"}")
+    nox.test.assert_true(r1.is_valid, "29-digit BigInt string passes")
+    nox.test.assert_eq_str(r1.data.get_bigint("wei").to_str(), huge, "BigInt value matches verbatim")
+
+    # Raw JSON number beyond INT64_MAX also parses losslessly via number_text
+    r_raw: ValidationResult = s.validate_json("{\"wei\": 12345678901234567890123456789}")
+    nox.test.assert_true(r_raw.is_valid, "29-digit JSON number beyond i64 passes losslessly")
+    nox.test.assert_eq_str(r_raw.data.get_bigint("wei").to_str(), huge, "BigInt raw JSON number exact")
+
+    # Model helper accessors + round-trip
+    m: Model = Model(s)
+    rm: ValidationResult = m.parse_json("{\"wei\": \"" + huge + "\"}")
+    nox.test.assert_true(rm.is_valid, "Model parses BigInt cleanly")
+    nox.test.assert_eq_str(m.get_bigint("wei").to_str(), huge, "Model.get_bigint returns exact BigInt")
+    rt: ValidationResult = s.validate_json(m.dump())
+    nox.test.assert_true(rt.is_valid, "BigInt round-trips cleanly")
+    nox.test.assert_eq_str(rt.data.get_bigint("wei").to_str(), huge, "BigInt round-trip exact")
+
+    # Out of bounds BigInt
+    r_small: ValidationResult = s.validate_json("{\"wei\": \"999\"}")
+    nox.test.assert_true(not r_small.is_valid, "BigInt below min_big rejected")
+    nox.test.assert_eq_str(r_small.errors[0].code, CODE_OUT_OF_RANGE, "min_big produces OUT_OF_RANGE")
+
+    # Fractional number rejected for bigint
+    r_frac: ValidationResult = s.validate_json("{\"wei\": \"12.34\"}")
+    nox.test.assert_true(not r_frac.is_valid, "Decimal string rejected for bigint")
+    nox.test.assert_eq_str(r_frac.errors[0].code, CODE_TYPE_MISMATCH, "decimal produces TYPE_MISMATCH for bigint")
+
+    # JSON Schema emission includes format annotations
+    js: str = s.to_json_schema()
+    nox.test.assert_true(len(js) > 0, "to_json_schema emits BigInt schema")
+    parsed_js: JsonValue = nox.json.parse(js)
+    props: JsonValue = nox.json.get(parsed_js, "properties")
+    wei_prop: JsonValue = nox.json.get(props, "wei")
+    nox.test.assert_eq_str(nox.json.as_string(nox.json.get(wei_prop, "format")), "bigint", "JSON Schema format is bigint")
+
+test_exact_decimal_validation_and_roundtrip()
+test_exact_bigint_validation_and_roundtrip()
+print("decimal_bigint_test passed")

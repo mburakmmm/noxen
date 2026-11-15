@@ -5,11 +5,17 @@ import core
 import errors
 import nox.db
 import nox.json
+import nox.strings
+import nox.uuid
+import nox.decimal
+import nox.bigint
 from schema import Schema, auto_schema
-from core import ValidatedData, ValidationResult, Result
+from core import ValidatedData, ValidationResult, Result, ValidationOutcome
 from errors import FieldError
 from nox.db import Row
 from nox.json import JsonValue
+from nox.decimal import Decimal
+from nox.bigint import BigInt
 
 class ModelSchema[T]:
     schema: Schema
@@ -78,6 +84,47 @@ class ModelSchema[T]:
         obj: T = f(res.data)
         empty_errs: list[FieldError] = []
         return Result[T](True, obj, empty_errs)
+
+    def parse_outcome(self, v: JsonValue) -> ValidationOutcome[T]:
+        return self.parse(v).to_outcome()
+
+    def parse_outcome_json(self, json_str: str) -> ValidationOutcome[T]:
+        return self.parse_json(json_str).to_outcome()
+
+    def parse_outcome_row(self, row: Row) -> ValidationOutcome[T]:
+        return self.parse_row(row).to_outcome()
+
+    def parse_outcome_toml(self, toml_str: str) -> ValidationOutcome[T]:
+        return self.parse_toml(toml_str).to_outcome()
+
+    def parse_outcome_yaml(self, yaml_str: str) -> ValidationOutcome[T]:
+        return self.parse_yaml(yaml_str).to_outcome()
+
+    def stream_ndjson_lines(self, lines: list[str]) -> Iterator[Result[T]]:
+        i: int = 0
+        while i < len(lines):
+            trimmed: str = nox.strings.trim(lines[i])
+            if len(trimmed) > 0:
+                yield self.parse_json(trimmed)
+            i = i + 1
+
+    def stream_ndjson(self, ndjson_str: str) -> Iterator[Result[T]]:
+        lines: list[str] = nox.strings.split(ndjson_str, "\n")
+        i: int = 0
+        while i < len(lines):
+            trimmed: str = nox.strings.trim(lines[i])
+            if len(trimmed) > 0:
+                yield self.parse_json(trimmed)
+            i = i + 1
+
+    def stream_ndjson_outcomes(self, ndjson_str: str) -> Iterator[ValidationOutcome[T]]:
+        lines: list[str] = nox.strings.split(ndjson_str, "\n")
+        i: int = 0
+        while i < len(lines):
+            trimmed: str = nox.strings.trim(lines[i])
+            if len(trimmed) > 0:
+                yield self.parse_outcome_json(trimmed)
+            i = i + 1
 
     def dump(self, data: ValidatedData) -> str:
         return self.schema.dump(data)
@@ -174,6 +221,30 @@ class BidirectionalModel[T]:
 
     def parse_yaml(self, yaml_str: str) -> Result[T]:
         return self.model.parse_yaml(yaml_str)
+
+    def parse_outcome(self, v: JsonValue) -> ValidationOutcome[T]:
+        return self.model.parse_outcome(v)
+
+    def parse_outcome_json(self, json_str: str) -> ValidationOutcome[T]:
+        return self.model.parse_outcome_json(json_str)
+
+    def parse_outcome_row(self, row: Row) -> ValidationOutcome[T]:
+        return self.model.parse_outcome_row(row)
+
+    def parse_outcome_toml(self, toml_str: str) -> ValidationOutcome[T]:
+        return self.model.parse_outcome_toml(toml_str)
+
+    def parse_outcome_yaml(self, yaml_str: str) -> ValidationOutcome[T]:
+        return self.model.parse_outcome_yaml(yaml_str)
+
+    def stream_ndjson_lines(self, lines: list[str]) -> Iterator[Result[T]]:
+        return self.model.stream_ndjson_lines(lines)
+
+    def stream_ndjson(self, ndjson_str: str) -> Iterator[Result[T]]:
+        return self.model.stream_ndjson(ndjson_str)
+
+    def stream_ndjson_outcomes(self, ndjson_str: str) -> Iterator[ValidationOutcome[T]]:
+        return self.model.stream_ndjson_outcomes(ndjson_str)
 
     def dump_data(self, data: ValidatedData) -> str:
         return self.model.dump(data)
@@ -288,6 +359,12 @@ class Model:
     def validate_yaml(self: Model, yaml_str: str) -> ValidationResult:
         return self.schema.validate_yaml(yaml_str)
 
+    def stream_ndjson(self: Model, ndjson_str: str) -> Iterator[ValidationResult]:
+        return self.schema.stream_ndjson(ndjson_str)
+
+    def stream_ndjson_lines(self: Model, lines: list[str]) -> Iterator[ValidationResult]:
+        return self.schema.stream_ndjson_lines(lines)
+
     def dump(self: Model) -> str:
         return self.schema.dump(self.data)
 
@@ -346,6 +423,18 @@ class Model:
     def get_opt_bool(self: Model, key: str) -> bool | None:
         return self.data.get_opt_bool(key)
 
+    def get_decimal(self: Model, key: str) -> Decimal:
+        return self.data.get_decimal(key)
+
+    def get_opt_decimal(self: Model, key: str) -> Decimal | None:
+        return self.data.get_opt_decimal(key)
+
+    def get_bigint(self: Model, key: str) -> BigInt:
+        return self.data.get_bigint(key)
+
+    def get_opt_bigint(self: Model, key: str) -> BigInt | None:
+        return self.data.get_opt_bigint(key)
+
     def get_list_str(self: Model, key: str) -> list[str]:
         return self.data.get_list_str(key)
 
@@ -400,6 +489,22 @@ class Model:
         self.data.set_opt_bool(key, val)
         return self
 
+    def set_decimal(self: Model, key: str, val: Decimal) -> Model:
+        self.data.set_decimal(key, val)
+        return self
+
+    def set_opt_decimal(self: Model, key: str, val: Decimal | None) -> Model:
+        self.data.set_opt_decimal(key, val)
+        return self
+
+    def set_bigint(self: Model, key: str, val: BigInt) -> Model:
+        self.data.set_bigint(key, val)
+        return self
+
+    def set_opt_bigint(self: Model, key: str, val: BigInt | None) -> Model:
+        self.data.set_opt_bigint(key, val)
+        return self
+
     def has(self: Model, key: str) -> bool:
         return self.data.has(key)
 
@@ -428,6 +533,14 @@ class UUIDMixin:
 
     def __init__(self: UUIDMixin) -> None:
         self.id = ""
+
+    def generate_v4(self: UUIDMixin) -> str:
+        self.id = nox.uuid.uuid4()
+        return self.id
+
+    def generate_v7(self: UUIDMixin) -> str:
+        self.id = nox.uuid.uuid7()
+        return self.id
 
 class SoftDeleteMixin:
     is_deleted: bool

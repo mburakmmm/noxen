@@ -23,17 +23,17 @@ jobs:
       - name: Install Nox (Linux / macOS)
         if: runner.os != 'Windows'
         env:
-          NOX_VERSION: v2.0.63
+          NOX_VERSION: v2.1.186
         run: |
-          curl -fsSL https://raw.githubusercontent.com/mburakmmm/nox-lang/v2.0.63/install.sh | bash
+          curl -fsSL https://raw.githubusercontent.com/mburakmmm/nox-lang/v2.1.186/install.sh | bash
           echo "$HOME/.nox-lang/bin" >> "$GITHUB_PATH"
 
       - name: Install Nox (Windows)
         if: runner.os == 'Windows'
         env:
-          NOX_VERSION: v2.0.63
+          NOX_VERSION: v2.1.186
         run: |
-          irm https://raw.githubusercontent.com/mburakmmm/nox-lang/v2.0.63/install.ps1 | iex
+          irm https://raw.githubusercontent.com/mburakmmm/nox-lang/v2.1.186/install.ps1 | iex
           echo "$env:USERPROFILE\.nox-lang\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Set up Python
@@ -56,8 +56,18 @@ jobs:
           noxc check validators.nox
           noxc check http_adapter.nox
           noxc check db_adapter.nox
+          noxc check csv_adapter.nox
+          noxc check protobuf_adapter.nox
+          noxc check yyjson_adapter.nox
+          noxc check pcre2_adapter.nox
           noxc check noxen.nox
           noxc check main.nox
+
+      - name: Smoke check WebAssembly target (wasm32-wasi)
+        if: runner.os != 'Windows'
+        run: |
+          noxc build --target wasm32-wasi -o "$RUNNER_TEMP/noxen_basic.wasm" examples/basic_model.nox
+          noxc check --target wasm32-wasi noxen.nox
 
       - name: Run test suite
         run: |
@@ -76,6 +86,8 @@ jobs:
           noxc run examples/realworld_service.nox
           noxc run examples/framework_adapter.nox
           noxc run examples/multi_format.nox
+          noxc run examples/enum_decimal_dataclass.nox
+          noxc run examples/fast_adapters.nox
 
       - name: Run benchmarks (LLVM backend)
         run: |

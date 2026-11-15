@@ -1,0 +1,105 @@
+# dataclass_decorators_test.nox — Tests @dataclass, @derive, class-level Noxen metadata decorators, and Mixins.
+
+import nox.test
+import nox.decimal
+import schema
+import core
+import errors
+import models
+from nox.decimal import Decimal
+from schema import Schema, auto_schema, POLICY_IGNORE, COERCION_LAX
+from core import ValidationResult
+from models import Model, auto_model, TimestampMixin, UUIDMixin, SoftDeleteMixin
+from errors import CODE_OUT_OF_RANGE, CODE_PATTERN_MISMATCH, CODE_INVALID_EMAIL, CODE_CHOICE_MISMATCH, CODE_STRING_TOO_SHORT
+
+@dataclass
+@field_len("city", 2, 60)
+@field_strip("city")
+class DataclassAddress:
+    city: str
+    zip_code: str
+
+@dataclass
+@schema_policy("ignore")
+@field_alias("full_name", "fullName")
+@field_secret("api_key")
+@field_regex("username", "^[a-z0-9_]+$")
+@field_len("username", 3, 20)
+@field_strip("username")
+@field_lower("username")
+@field_format("email", "email")
+@field_format("tz", "timezone")
+@field_bounds("age", 18, 120)
+@field_bounds("balance", "0.00", "1000000.00")
+@field_decimal_scale("balance", 10, 2)
+@field_choices("role", ["admin", "user", "guest"])
+@field_default("role", "user")
+class DataclassAccount:
+    username: str
+    full_name: str
+    email: str
+    tz: str
+    age: int
+    balance: Decimal
+    role: str
+    api_key: str
+    address: DataclassAddress
+
+class AuditedDoc(TimestampMixin, UUIDMixin, SoftDeleteMixin):
+    title: str
+
+    def __init__(self, created_at: str, updated_at: str, id: str, is_deleted: bool, deleted_at: str | None, title: str) -> None:
+        self.created_at = created_at
+        self.updated_at = updated_at
+        self.id = id
+        self.is_deleted = is_deleted
+        self.deleted_at = deleted_at
+        self.title = title
+
+def test_dataclass_and_decorator_metadata() -> None:
+    s: Schema = auto_schema("DataclassAccount")
+    nox.test.assert_eq_int(s.policy, POLICY_IGNORE, "@schema_policy('ignore') applied")
+
+    # Valid payload with alias, extra unknown field ignored, whitespace stripped + lowercased
+    raw_ok: str = "{\"username\": \"  Alice_99 \", \"fullName\": \"Alice Smith\", \"email\": \"alice@example.com\", \"tz\": \"UTC\", \"age\": 28, \"balance\": \"1250.50\", \"api_key\": \"secret-123\", \"extra_ignored\": true, \"address\": {\"city\": \"  Istanbul  \", \"zip_code\": \"34000\"}}"
+    r_ok: ValidationResult = s.validate_json(raw_ok)
+    nox.test.assert_true(r_ok.is_valid, "Decorated @dataclass payload passes")
+    nox.test.assert_eq_str(r_ok.data.get_str("username"), "alice_99", "@field_strip + @field_lower applied")
+    nox.test.assert_eq_str(r_ok.data.get_str("full_name"), "Alice Smith", "@field_alias mapped fullName -> full_name")
+    nox.test.assert_eq_str(r_ok.data.get_str("role"), "user", "@field_default applied for missing role")
+    nox.test.assert_eq_str(r_ok.data.get_object("address").get_str("city"), "Istanbul", "Nested @dataclass field decorator applied")
+
+    # auto_model works directly with decorated @dataclass
+    m: Model = auto_model("DataclassAccount")
+    rm: ValidationResult = m.parse_json(raw_ok)
+    nox.test.assert_true(rm.is_valid, "auto_model works seamlessly with decorated @dataclass")
+    nox.test.assert_true(m.get_decimal("balance") == nox.decimal.parse("1250.50"), "Decimal balance exact")
+
+    # Invalid constraints trigger expected errors + secret redaction
+    raw_bad: str = "{\"username\": \"!!\", \"fullName\": \"A\", \"email\": \"bad\", \"tz\": \"UTC\", \"age\": 15, \"balance\": \"-1.00\", \"role\": \"superuser\", \"api_key\": \"top-secret\", \"address\": {\"city\": \"X\", \"zip_code\": \"1\"}}"
+    r_bad: ValidationResult = s.validate_json(raw_bad)
+    nox.test.assert_true(not r_bad.is_valid, "Invalid decorated payload rejected")
+    nox.test.assert_eq_str(r_bad.errors[0].code, CODE_STRING_TOO_SHORT, "username min_length enforced")
+    nox.test.assert_eq_str(r_bad.errors[1].code, CODE_PATTERN_MISMATCH, "username regex enforced")
+    nox.test.assert_eq_str(r_bad.errors[2].code, CODE_INVALID_EMAIL, "email format enforced")
+    nox.test.assert_eq_str(r_bad.errors[3].code, CODE_OUT_OF_RANGE, "age min bound enforced")
+
+def test_true_multiple_inheritance_mixins() -> None:
+    doc_schema: Schema = auto_schema("AuditedDoc")
+    r: ValidationResult = doc_schema.validate_json(
+        "{\"created_at\": \"2026-11-15T10:00:00Z\", \"updated_at\": \"2026-11-15T10:05:00Z\", \"id\": \"u1\", \"is_deleted\": false, \"deleted_at\": null, \"title\": \"RFC\"}"
+    )
+    nox.test.assert_true(r.is_valid, "Multiple-inheritance Mixin model validated via auto_schema")
+
+    # Polymorphic / mixin method check directly on class instance
+    doc: AuditedDoc = AuditedDoc("2026-11-15T10:00:00Z", "2026-11-15T10:00:00Z", "", False, None, "Spec")
+    doc.generate_v7()
+    doc.touch("2026-11-15T12:00:00Z")
+    doc.mark_deleted("2026-11-15T13:00:00Z")
+    nox.test.assert_true(len(doc.id) == 36, "UUIDMixin.generate_v7 works on subclass")
+    nox.test.assert_eq_str(doc.updated_at, "2026-11-15T12:00:00Z", "TimestampMixin.touch works on subclass")
+    nox.test.assert_true(doc.is_deleted, "SoftDeleteMixin.mark_deleted works on subclass")
+
+test_dataclass_and_decorator_metadata()
+test_true_multiple_inheritance_mixins()
+print("dataclass_decorators_test passed")

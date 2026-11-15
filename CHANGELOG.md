@@ -5,6 +5,47 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-11-15
+
+### Added
+- **Optional Desktop High-Speed JSON/JSON5 Adapter (`yyjson_adapter.nox`)**:
+  - Added standalone desktop adapter powered by `nox.yyjson`: `yyjson_supported()`, `validate_yyjson(s, json_str)`, `validate_yyjson_relaxed(s, json_str)`, `validate_yyjson5(s, json_str)`, and generic `YyjsonModel[T]`.
+  - Supports strict RFC 8259 JSON, relaxed comments/trailing commas, and JSON5 syntax while preserving 64-bit integer accuracy, `safe_int53` opt-in guard, `Decimal`/`BigInt`, string sanitizers, `max_depth`/`max_errors`, `POLICY_*`, discriminated unions, and custom validators.
+  - Explicitly isolated from `noxen.nox` and core modules to preserve full `wasm32-wasi` and mobile portability.
+  - Documented duplicate-key difference: unlike `nox.json`, `nox.yyjson` does not reject duplicate object keys; use core `Schema.validate_json` when duplicate-key rejection is required.
+- **Optional Desktop Perl/JIT Regex Adapter (`pcre2_adapter.nox`)**:
+  - Added standalone desktop adapter powered by `nox.pcre2`: `pcre2_supported()`, `pcre2_jit_supported()`, `CompiledPcre2Pattern`, `compile_pcre2_pattern()`, `compile_pcre2_validator()`, and `pcre2_full_match_ok()`.
+  - Enables pre-compiled / JIT lookahead, lookbehind, backreferences, named captures (`Match.named()`), secret value redaction, and safe `Pcre2Error` handling inside `Schema.add_validator(...)`.
+  - Strictly excluded from core `noxen.nox` to avoid linking `noxclibs.a` / `dynamic_code` on WASM or mobile targets.
+- **Binary Protocol Buffers Adapter (`protobuf_adapter.nox`)**:
+  - Added `ProtoMapping`, `ProtoFieldSpec`, `ProtoModelAdapter[T]`, `encode_proto()`, `decode_proto()`, and error code `CODE_INVALID_PROTOBUF` (`"invalid_protobuf"`).
+  - Supports automatic sequential tag assignment (`.auto_tags()`), explicit wire encodings (`WIRE_VARINT`, `WIRE_SINT`, `WIRE_FIXED64`, `WIRE_FIXED32`, `WIRE_SFIXED32`, `WIRE_DOUBLE`, `WIRE_FLOAT32`, `WIRE_STRING`, `WIRE_BOOL`, `WIRE_DECIMAL`, `WIRE_BIGINT`, `WIRE_MESSAGE`), packed repeated varints, unknown tag enforcement under `POLICY_FORBID`, depth bounds, and full `Schema.validate_data_at()` constraint enforcement.
+- **New Integration & Example Coverage**:
+  - Added `tests/integration/yyjson_adapter_test.nox`, `tests/unit/pcre2_adapter_test.nox`, `tests/integration/protobuf_adapter_test.nox`, and `examples/fast_adapters.nox`.
+
+## [0.10.0] - 2026-11-15
+
+### Added
+- **Full Signed 64-Bit Integer Support & Optional `.safe_int53()` Guard**:
+  - Upgraded `int` and `list[int]` parsing in `schema.nox` from IEEE-754 53-bit float extraction to full 64-bit integer parsing via `nox.json.as_int` (`[-9223372036854775808, 9223372036854775807]`), while continuing to reject fractional floats cleanly.
+  - Added opt-in `Field.safe_int53()` / `@field_safe_int53` for JavaScript/WebAssembly JSON interoperability (`[-9007199254740991, 9007199254740991]`).
+  - Optimized object field resolution in `Schema.validate_at` to a single pass (`dict[str, JsonValue]`) instead of repeated linear key scans.
+- **Unicode Normalization, Locale-Aware Case Sanitizers, UUIDv7 & IANA Timezone Validators**:
+  - Added `Field.strip()`, `Field.to_lower()`, `Field.to_upper()`, `Field.lower_tr()`, `Field.upper_tr()`, and `Field.unicode_normalize(form)` backed by `nox.unicode`.
+  - Added `Field.uuid7()` (`nox.uuid.uuid7` validation), `UUIDMixin.generate_v4()` / `UUIDMixin.generate_v7()`, and `Field.timezone()` (`nox.timezone` + `CODE_INVALID_TIMEZONE`).
+- **Exact Precision `Decimal` and Arbitrary-Precision `BigInt` Fields**:
+  - Added `field_decimal`, `field_bigint`, `ValidatedData` decimal/bigint storage and accessors, `Serializer.decimal` / `opt_decimal` / `bigint` / `opt_bigint`, `Model` getters/setters, decimal/bigint bounds and scale constraints (`min_dec`, `max_dec`, `gt_dec`, `lt_dec`, `decimal_places`, `max_digits`, `min_big`, `max_big`, `gt_big`, `lt_big`), and JSON Schema Draft 2020-12 emission (`"format": "decimal"` / `"bigint"`).
+- **Discriminated Unions & Exhaustive `enum ValidationOutcome[T]`**:
+  - Added `enum ValidationOutcome[T]` (`Ok(value: T)` | `Err(errors: list[FieldError])`), `Result[T].to_outcome()`, `ModelSchema[T].parse_outcome*()`, and `BidirectionalModel[T].parse_outcome*()` for compiler-checked `match`/`case` error handling.
+  - Added `UnionSchema`, `Schema.field_union()`, `Schema.field_union_map()`, `Schema.field_list_union()`, and JSON Schema Draft 2020-12 `oneOf` + `discriminator` generation.
+- **Full `@dataclass` + Class-Level Decorator Metadata Support**:
+  - Added `nox.reflect` decorator metadata ingestion (`@schema_policy`, `@schema_coercion`, `@schema_max_depth`, `@schema_max_errors`, `@field_alias`, `@field_secret`, `@field_describe`, `@field_optional`, `@field_nullable`, `@field_required`, `@field_safe_int53`, `@field_regex`, `@field_format`, `@field_bounds`, `@field_len`, `@field_items`, `@field_decimal_scale`, `@field_choices`, `@field_strip`, `@field_lower`, `@field_upper`, `@field_lower_tr`, `@field_upper_tr`, `@field_normalize`, `@field_default`).
+- **Lazy NDJSON Streaming, RFC 4180 CSV Adapter, `nox.web` HTTP Helpers, Property Shrinking & WASM Portability**:
+  - Added generator-based `stream_ndjson()` and `stream_ndjson_lines()` (`Iterator[ValidationResult]` / `Iterator[Result[T]]` / `Iterator[ValidationOutcome[T]]`).
+  - Added `csv_adapter.nox` (`validate_csv`, `stream_csv`, `dump_csv`, `CsvModelAdapter[T]`, `CODE_INVALID_CSV`).
+  - Enhanced `http_adapter.nox` with `nox.web.header`, `is_json_content_type()`, `json_400()`, `json_415()`, `validate_request()`, and `HttpModelAdapter[T]`.
+  - Added shrinking property tests (`tests/fuzz/property_shrinking_test.nox` via `nox.property`), upgraded `.github/workflows/ci.yml` to `v2.1.186`, and verified `wasm32-wasi` target compilation for core `noxen`.
+
 ## [0.9.0] - 2026-10-29
 
 ### Added

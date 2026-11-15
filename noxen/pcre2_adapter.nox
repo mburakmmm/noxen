@@ -1,0 +1,2 @@
+import pcre2_adapter
+from pcre2_adapter import pcre2_supported, pcre2_jit_supported, CompiledPcre2Pattern, compile_pcre2_pattern, compile_pcre2_validator, pcre2_full_match_ok

@@ -1,0 +1,414 @@
+# protobuf_adapter.nox — Schema-validated binary Protocol Buffers adapter powered by nox.protobuf.
+#
+# Encodes validated Noxen models/data into wire-format bytes via `nox.protobuf.Writer` and
+# decodes wire payloads via `nox.protobuf.Reader`, validating unknown tags, wire types, depth
+# limits, required fields, constraints, Decimal/BigInt values, and custom validators.
+
+import nox.protobuf
+import nox.bytes
+import nox.decimal
+import nox.bigint
+import schema
+import core
+import errors
+import models
+from nox.protobuf import Writer, Reader, ProtobufError
+from nox.decimal import Decimal
+from nox.bigint import BigInt
+from schema import Schema, Field, POLICY_FORBID, _parse_decimal_str, _parse_bigint_str
+from core import ValidatedData, ValidationResult, Result, ValidationOutcome
+from errors import FieldError, ValidationError, CODE_INVALID_PROTOBUF, CODE_EXTRA_FIELD, CODE_RECURSION_LIMIT, CODE_TYPE_MISMATCH
+from models import ModelSchema
+
+WIRE_DEFAULT: str = "default"
+WIRE_VARINT: str = "varint"
+WIRE_SINT: str = "sint"
+WIRE_FIXED64: str = "fixed64"
+WIRE_FIXED32: str = "fixed32"
+WIRE_SFIXED32: str = "sfixed32"
+WIRE_DOUBLE: str = "double"
+WIRE_FLOAT32: str = "float32"
+WIRE_STRING: str = "string"
+WIRE_BOOL: str = "bool"
+WIRE_DECIMAL: str = "decimal"
+WIRE_BIGINT: str = "bigint"
+WIRE_MESSAGE: str = "message"
+
+MAX_PROTOBUF_PAYLOAD_BYTES: int = 16777216
+
+class ProtoFieldSpec:
+    tag: int
+    field_name: str
+    wire_kind: str
+    nested: ProtoMapping | None
+
+    def __init__(self: ProtoFieldSpec, tag: int, field_name: str, wire_kind: str, nested: ProtoMapping | None = None) -> None:
+        self.tag = tag
+        self.field_name = field_name
+        self.wire_kind = wire_kind
+        self.nested = nested
+
+def _default_wire_kind(f: Field) -> str:
+    if f.kind == "string":
+        return WIRE_STRING
+    if f.kind == "int":
+        return WIRE_VARINT
+    if f.kind == "float":
+        return WIRE_DOUBLE
+    if f.kind == "bool":
+        return WIRE_BOOL
+    if f.kind == "decimal":
+        return WIRE_DECIMAL
+    if f.kind == "bigint":
+        return WIRE_BIGINT
+    if f.kind == "object":
+        return WIRE_MESSAGE
+    return WIRE_DEFAULT
+
+class ProtoMapping:
+    schema: Schema
+    specs: list[ProtoFieldSpec]
+    by_tag: dict[int, ProtoFieldSpec]
+    by_name: dict[str, ProtoFieldSpec]
+
+    def __init__(self: ProtoMapping, schema: Schema) -> None:
+        self.schema = schema
+        self.specs = []
+        self.by_tag = {}
+        self.by_name = {}
+
+    def map(self: ProtoMapping, tag: int, field_name: str, wire_kind: str = "default", nested: ProtoMapping | None = None) -> ProtoMapping:
+        if tag <= 0:
+            raise ValueError("Protobuf field tag must be positive (>= 1), got " + str(tag))
+        if tag in self.by_tag:
+            raise ValueError("Duplicate protobuf tag " + str(tag) + " in schema '" + self.schema.name + "'")
+        if field_name in self.by_name:
+            raise ValueError("Field '" + field_name + "' already mapped in ProtoMapping")
+        f_opt: Field | None = self.schema.get_field(field_name)
+        if f_opt is None:
+            raise ValueError("Unknown field '" + field_name + "' for ProtoMapping on schema '" + self.schema.name + "'")
+
+        resolved_kind: str = wire_kind
+        if resolved_kind == WIRE_DEFAULT:
+            resolved_kind = _default_wire_kind(f_opt)
+
+        spec: ProtoFieldSpec = ProtoFieldSpec(tag, field_name, resolved_kind, nested)
+        self.specs.append(spec)
+        self.by_tag[tag] = spec
+        self.by_name[field_name] = spec
+        return self
+
+    def auto_tags(self: ProtoMapping) -> ProtoMapping:
+        i: int = 0
+        while i < len(self.schema.fields):
+            f: Field = self.schema.fields[i]
+            if f.name not in self.by_name:
+                sub_map: ProtoMapping | None = None
+                if f.kind == "object":
+                    ns: Schema | None = f.nested_schema
+                    if ns is not None:
+                        sub_map = ProtoMapping(ns).auto_tags()
+                elif f.kind == "list" and f.item_kind == "object":
+                    isub: Schema | None = f.item_schema
+                    if isub is not None:
+                        sub_map = ProtoMapping(isub).auto_tags()
+                self.map(i + 1, f.name, WIRE_DEFAULT, sub_map)
+            i = i + 1
+        return self
+
+    def _encode_to_writer(self: ProtoMapping, data: ValidatedData, w: Writer, depth: int) -> None:
+        if depth > self.schema.max_depth:
+            raise ValueError("Protobuf encoding exceeded max_depth (" + str(self.schema.max_depth) + ")")
+
+        si: int = 0
+        while si < len(self.specs):
+            spec: ProtoFieldSpec = self.specs[si]
+            f_opt: Field | None = self.schema.get_field(spec.field_name)
+            if f_opt is not None and data.has(spec.field_name) and not data.is_null(spec.field_name):
+                f: Field = f_opt
+                if f.kind == "string":
+                    w.string(spec.tag, data.get_str(f.name))
+                elif f.kind == "int":
+                    iv: int = data.get_int(f.name)
+                    if spec.wire_kind == WIRE_SINT:
+                        w.sint(spec.tag, iv)
+                    elif spec.wire_kind == WIRE_FIXED64:
+                        w.fixed64(spec.tag, iv)
+                    elif spec.wire_kind == WIRE_FIXED32 or spec.wire_kind == WIRE_SFIXED32:
+                        w.fixed32(spec.tag, iv)
+                    else:
+                        w.varint(spec.tag, iv)
+                elif f.kind == "float":
+                    fv: float = data.get_float(f.name)
+                    if spec.wire_kind == WIRE_FLOAT32:
+                        w.float32(spec.tag, fv)
+                    else:
+                        w.double(spec.tag, fv)
+                elif f.kind == "bool":
+                    w.boolean(spec.tag, data.get_bool(f.name))
+                elif f.kind == "decimal":
+                    w.string(spec.tag, str(data.get_decimal(f.name)))
+                elif f.kind == "bigint":
+                    w.string(spec.tag, data.get_bigint(f.name).to_str())
+                elif f.kind == "object":
+                    nm: ProtoMapping | None = spec.nested
+                    if nm is not None:
+                        sub_w: Writer = nox.protobuf.writer()
+                        nm._encode_to_writer(data.get_object(f.name), sub_w, depth + 1)
+                        w.message(spec.tag, sub_w)
+                elif f.kind == "list":
+                    if f.item_kind == "string":
+                        s_items: list[str] = data.get_list_str(f.name)
+                        ai: int = 0
+                        while ai < len(s_items):
+                            w.string(spec.tag, s_items[ai])
+                            ai = ai + 1
+                    elif f.item_kind == "int":
+                        i_items: list[int] = data.get_list_int(f.name)
+                        if spec.wire_kind == WIRE_SINT:
+                            ai2: int = 0
+                            while ai2 < len(i_items):
+                                w.sint(spec.tag, i_items[ai2])
+                                ai2 = ai2 + 1
+                        else:
+                            w.packed_varints(spec.tag, i_items)
+                    elif f.item_kind == "float":
+                        f_items: list[float] = data.get_list_float(f.name)
+                        ai3: int = 0
+                        while ai3 < len(f_items):
+                            w.double(spec.tag, f_items[ai3])
+                            ai3 = ai3 + 1
+                    elif f.item_kind == "bool":
+                        b_items: list[bool] = data.get_list_bool(f.name)
+                        ai4: int = 0
+                        while ai4 < len(b_items):
+                            w.boolean(spec.tag, b_items[ai4])
+                            ai4 = ai4 + 1
+                    elif f.item_kind == "object":
+                        o_items: list[ValidatedData] = data.get_list_object(f.name)
+                        nm_item: ProtoMapping | None = spec.nested
+                        if nm_item is not None:
+                            ai5: int = 0
+                            while ai5 < len(o_items):
+                                item_w: Writer = nox.protobuf.writer()
+                                nm_item._encode_to_writer(o_items[ai5], item_w, depth + 1)
+                                w.message(spec.tag, item_w)
+                                ai5 = ai5 + 1
+            si = si + 1
+
+    # Validates in-memory data against the schema, then serializes to protobuf wire bytes.
+    def encode(self: ProtoMapping, data: ValidatedData) -> list[int]:
+        vr: ValidationResult = self.schema.validate_data(data)
+        if not vr.is_valid:
+            raise ValidationError(vr.errors)
+        w: Writer = nox.protobuf.writer()
+        self._encode_to_writer(vr.data, w, 0)
+        return w.to_bytes()
+
+    def encode_str(self: ProtoMapping, data: ValidatedData) -> str:
+        return nox.bytes.str_from_list(self.encode(data))
+
+    def _decode_reader(self: ProtoMapping, r: Reader, prefix: str, depth: int) -> ValidationResult:
+        data: ValidatedData = ValidatedData()
+        err_list: list[FieldError] = []
+
+        if depth > self.schema.max_depth:
+            root_p: str = prefix
+            if root_p == "":
+                root_p = "root"
+            err_list.append(FieldError(root_p, CODE_RECURSION_LIMIT, "Maximum nesting depth (" + str(self.schema.max_depth) + ") exceeded", "depth <= " + str(self.schema.max_depth), str(depth)))
+            return ValidationResult(False, data, err_list)
+
+        # Accumulators for repeated fields across wire tags
+        list_str_acc: dict[str, list[str]] = {}
+        list_int_acc: dict[str, list[int]] = {}
+        list_float_acc: dict[str, list[float]] = {}
+        list_bool_acc: dict[str, list[bool]] = {}
+        list_obj_acc: dict[str, list[ValidatedData]] = {}
+
+        try:
+            while r.next_field():
+                tag: int = r.field
+                if tag not in self.by_tag:
+                    if self.schema.policy == POLICY_FORBID:
+                        unk_p: str = "tag#" + str(tag)
+                        if prefix != "":
+                            unk_p = prefix + "." + unk_p
+                        err_list.append(FieldError(unk_p, CODE_EXTRA_FIELD, "Unexpected unknown protobuf tag: " + str(tag), "none", "wire_type=" + str(r.wire_type)))
+                    r.skip()
+                else:
+                    spec: ProtoFieldSpec = self.by_tag[tag]
+                    f_opt: Field | None = self.schema.get_field(spec.field_name)
+                    if f_opt is None:
+                        r.skip()
+                    else:
+                        f: Field = f_opt
+                        full_path: str = f.name
+                        if prefix != "":
+                            full_path = prefix + "." + f.name
+
+                        if f.kind == "string":
+                            data.set_str(f.name, r.read_string())
+                        elif f.kind == "int":
+                            if spec.wire_kind == WIRE_SINT:
+                                data.set_int(f.name, r.read_sint())
+                            elif spec.wire_kind == WIRE_FIXED64:
+                                data.set_int(f.name, r.read_fixed64())
+                            elif spec.wire_kind == WIRE_FIXED32:
+                                data.set_int(f.name, r.read_fixed32())
+                            elif spec.wire_kind == WIRE_SFIXED32:
+                                data.set_int(f.name, r.read_sfixed32())
+                            else:
+                                data.set_int(f.name, r.read_varint())
+                        elif f.kind == "float":
+                            if spec.wire_kind == WIRE_FLOAT32:
+                                data.set_float(f.name, r.read_float32())
+                            else:
+                                data.set_float(f.name, r.read_double())
+                        elif f.kind == "bool":
+                            data.set_bool(f.name, r.read_bool())
+                        elif f.kind == "decimal":
+                            ds: str = r.read_string()
+                            d_opt: Decimal | None = _parse_decimal_str(ds)
+                            if d_opt is None:
+                                err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Invalid decimal encoding in protobuf field '" + full_path + "'", "decimal string", ds))
+                            else:
+                                data.set_decimal(f.name, d_opt)
+                        elif f.kind == "bigint":
+                            bgs: str = r.read_string()
+                            bg_opt: BigInt | None = _parse_bigint_str(bgs)
+                            if bg_opt is None:
+                                err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Invalid bigint encoding in protobuf field '" + full_path + "'", "bigint string", bgs))
+                            else:
+                                data.set_bigint(f.name, bg_opt)
+                        elif f.kind == "object":
+                            nm: ProtoMapping | None = spec.nested
+                            sub_r: Reader = r.read_message()
+                            if nm is not None:
+                                sub_res: ValidationResult = nm._decode_reader(sub_r, full_path, depth + 1)
+                                if not sub_res.is_valid:
+                                    ei: int = 0
+                                    while ei < len(sub_res.errors):
+                                        err_list.append(sub_res.errors[ei])
+                                        ei = ei + 1
+                                else:
+                                    data.set_object(f.name, sub_res.data)
+                        elif f.kind == "list":
+                            if f.item_kind == "string":
+                                if f.name not in list_str_acc:
+                                    list_str_acc[f.name] = []
+                                list_str_acc[f.name].append(r.read_string())
+                            elif f.item_kind == "int":
+                                if f.name not in list_int_acc:
+                                    list_int_acc[f.name] = []
+                                if r.wire_type == 2:
+                                    packed: list[int] = r.read_packed_varints()
+                                    pi: int = 0
+                                    while pi < len(packed):
+                                        list_int_acc[f.name].append(packed[pi])
+                                        pi = pi + 1
+                                elif spec.wire_kind == WIRE_SINT:
+                                    list_int_acc[f.name].append(r.read_sint())
+                                else:
+                                    list_int_acc[f.name].append(r.read_varint())
+                            elif f.item_kind == "float":
+                                if f.name not in list_float_acc:
+                                    list_float_acc[f.name] = []
+                                if spec.wire_kind == WIRE_FLOAT32:
+                                    list_float_acc[f.name].append(r.read_float32())
+                                else:
+                                    list_float_acc[f.name].append(r.read_double())
+                            elif f.item_kind == "bool":
+                                if f.name not in list_bool_acc:
+                                    list_bool_acc[f.name] = []
+                                list_bool_acc[f.name].append(r.read_bool())
+                            elif f.item_kind == "object":
+                                if f.name not in list_obj_acc:
+                                    list_obj_acc[f.name] = []
+                                nm_el: ProtoMapping | None = spec.nested
+                                sub_r_el: Reader = r.read_message()
+                                idx_el: int = len(list_obj_acc[f.name])
+                                if nm_el is not None:
+                                    el_res: ValidationResult = nm_el._decode_reader(sub_r_el, full_path + "[" + str(idx_el) + "]", depth + 1)
+                                    if not el_res.is_valid:
+                                        eei: int = 0
+                                        while eei < len(el_res.errors):
+                                            err_list.append(el_res.errors[eei])
+                                            eei = eei + 1
+                                    else:
+                                        list_obj_acc[f.name].append(el_res.data)
+                            else:
+                                r.skip()
+        except ProtobufError as pe:
+            root_e: str = prefix
+            if root_e == "":
+                root_e = "root"
+            err_list.append(FieldError(root_e, CODE_INVALID_PROTOBUF, "Malformed protobuf wire payload: " + pe.message, "valid protobuf wire bytes", "wire error"))
+            return ValidationResult(False, data, err_list)
+
+        # Flush accumulated repeated lists into ValidatedData before schema validation
+        for k_s in list_str_acc:
+            data.set_list_str(k_s, list_str_acc[k_s])
+        for k_i in list_int_acc:
+            data.set_list_int(k_i, list_int_acc[k_i])
+        for k_f in list_float_acc:
+            data.set_list_float(k_f, list_float_acc[k_f])
+        for k_b in list_bool_acc:
+            data.set_list_bool(k_b, list_bool_acc[k_b])
+        for k_o in list_obj_acc:
+            data.set_list_object(k_o, list_obj_acc[k_o])
+
+        # Enforce all Schema constraints (missing required fields, defaults, sanitizers, bounds, validators)
+        schema_res: ValidationResult = self.schema.validate_data_at(data, prefix, depth)
+        si_e: int = 0
+        while si_e < len(schema_res.errors):
+            err_list.append(schema_res.errors[si_e])
+            si_e = si_e + 1
+
+        return ValidationResult(len(err_list) == 0, schema_res.data, err_list)
+
+    def decode(self: ProtoMapping, payload: list[int]) -> ValidationResult:
+        if len(payload) > MAX_PROTOBUF_PAYLOAD_BYTES:
+            errs: list[FieldError] = []
+            errs.append(FieldError("root", CODE_INVALID_PROTOBUF, "Protobuf payload exceeds maximum allowed size", "<= 16MiB", str(len(payload)) + " bytes"))
+            return ValidationResult(False, ValidatedData(), errs)
+        r: Reader = nox.protobuf.reader(payload)
+        return self._decode_reader(r, "", 0)
+
+    def decode_str(self: ProtoMapping, payload_str: str) -> ValidationResult:
+        return self.decode(nox.bytes.list_from_str(payload_str))
+
+def encode_proto(mapping: ProtoMapping, data: ValidatedData) -> list[int]:
+    return mapping.encode(data)
+
+def decode_proto(mapping: ProtoMapping, payload: list[int]) -> ValidationResult:
+    return mapping.decode(payload)
+
+class ProtoModelAdapter[T]:
+    mapping: ProtoMapping
+    model: ModelSchema[T]
+
+    def __init__(self, mapping: ProtoMapping, model: ModelSchema[T]) -> None:
+        self.mapping = mapping
+        self.model = model
+
+    def encode(self, obj: T, unparser: (T) -> ValidatedData) -> list[int]:
+        u: (T) -> ValidatedData = unparser
+        d: ValidatedData = u(obj)
+        return self.mapping.encode(d)
+
+    def encode_str(self, obj: T, unparser: (T) -> ValidatedData) -> str:
+        return nox.bytes.str_from_list(self.encode(obj, unparser))
+
+    def decode(self, payload: list[int]) -> Result[T]:
+        vr: ValidationResult = self.mapping.decode(payload)
+        if vr.is_valid:
+            fn: (ValidatedData) -> T = self.model.factory
+            return Result[T](True, fn(vr.data), [])
+        return Result[T](False, None, vr.errors)
+
+    def decode_str(self, payload_str: str) -> Result[T]:
+        return self.decode(nox.bytes.list_from_str(payload_str))
+
+    def decode_outcome(self, payload: list[int]) -> ValidationOutcome[T]:
+        return self.decode(payload).to_outcome()

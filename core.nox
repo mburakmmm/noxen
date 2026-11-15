@@ -3,13 +3,19 @@
 import errors
 from errors import FieldError, ValidationError
 import nox.json
+import nox.decimal
+import nox.bigint
 from nox.json import JsonWriter
+from nox.decimal import Decimal
+from nox.bigint import BigInt
 
 class ValidatedData:
     _strs: dict[str, str]
     _ints: dict[str, int]
     _floats: dict[str, float]
     _bools: dict[str, bool]
+    _decimals: dict[str, Decimal]
+    _bigints: dict[str, BigInt]
     _list_strs: dict[str, list[str]]
     _list_ints: dict[str, list[int]]
     _list_floats: dict[str, list[float]]
@@ -26,6 +32,8 @@ class ValidatedData:
         self._ints = {}
         self._floats = {}
         self._bools = {}
+        self._decimals = {}
+        self._bigints = {}
         self._list_strs = {}
         self._list_ints = {}
         self._list_floats = {}
@@ -57,6 +65,16 @@ class ValidatedData:
         self._bools[pk] = v
         self._present.append(pk)
 
+    def set_decimal(self: ValidatedData, k: str, v: Decimal) -> None:
+        pk: str = self._prefix + k
+        self._decimals[pk] = v
+        self._present.append(pk)
+
+    def set_bigint(self: ValidatedData, k: str, v: BigInt) -> None:
+        pk: str = self._prefix + k
+        self._bigints[pk] = v
+        self._present.append(pk)
+
     def set_object(self: ValidatedData, k: str, v: ValidatedData) -> None:
         pk: str = self._prefix + k
         self._present.append(pk)
@@ -78,6 +96,10 @@ class ValidatedData:
                 self._floats[target_k] = v._floats[orig_k]
             if orig_k in v._bools:
                 self._bools[target_k] = v._bools[orig_k]
+            if orig_k in v._decimals:
+                self._decimals[target_k] = v._decimals[orig_k]
+            if orig_k in v._bigints:
+                self._bigints[target_k] = v._bigints[orig_k]
             if orig_k in v._list_strs:
                 self._list_strs[target_k] = v._list_strs[orig_k]
             if orig_k in v._list_ints:
@@ -140,6 +162,10 @@ class ValidatedData:
                     self._floats[target_k] = item._floats[orig_k]
                 if orig_k in item._bools:
                     self._bools[target_k] = item._bools[orig_k]
+                if orig_k in item._decimals:
+                    self._decimals[target_k] = item._decimals[orig_k]
+                if orig_k in item._bigints:
+                    self._bigints[target_k] = item._bigints[orig_k]
                 if orig_k in item._list_strs:
                     self._list_strs[target_k] = item._list_strs[orig_k]
                 if orig_k in item._list_ints:
@@ -186,6 +212,18 @@ class ValidatedData:
             self.set_null(k)
         else:
             self.set_bool(k, v)
+
+    def set_opt_decimal(self: ValidatedData, k: str, v: Decimal | None) -> None:
+        if v is None:
+            self.set_null(k)
+        else:
+            self.set_decimal(k, v)
+
+    def set_opt_bigint(self: ValidatedData, k: str, v: BigInt | None) -> None:
+        if v is None:
+            self.set_null(k)
+        else:
+            self.set_bigint(k, v)
 
     def has(self: ValidatedData, k: str) -> bool:
         pk: str = self._prefix + k
@@ -247,6 +285,22 @@ class ValidatedData:
             return self._ints[pk] != 0
         return None
 
+    def get_decimal(self: ValidatedData, k: str) -> Decimal:
+        return self._decimals[self._prefix + k]
+
+    def get_opt_decimal(self: ValidatedData, k: str) -> Decimal | None:
+        if self.is_null(k) or not self.has(k):
+            return None
+        return self._decimals[self._prefix + k]
+
+    def get_bigint(self: ValidatedData, k: str) -> BigInt:
+        return self._bigints[self._prefix + k]
+
+    def get_opt_bigint(self: ValidatedData, k: str) -> BigInt | None:
+        if self.is_null(k) or not self.has(k):
+            return None
+        return self._bigints[self._prefix + k]
+
     def get_object(self: ValidatedData, k: str) -> ValidatedData:
         sub: ValidatedData = ValidatedData()
         sub._prefix = self._prefix + k + "."
@@ -254,6 +308,8 @@ class ValidatedData:
         sub._ints = self._ints
         sub._floats = self._floats
         sub._bools = self._bools
+        sub._decimals = self._decimals
+        sub._bigints = self._bigints
         sub._list_strs = self._list_strs
         sub._list_ints = self._list_ints
         sub._list_floats = self._list_floats
@@ -312,6 +368,8 @@ class ValidatedData:
             sub._ints = self._ints
             sub._floats = self._floats
             sub._bools = self._bools
+            sub._decimals = self._decimals
+            sub._bigints = self._bigints
             sub._list_strs = self._list_strs
             sub._list_ints = self._list_ints
             sub._list_floats = self._list_floats
@@ -344,6 +402,12 @@ class ValidatedData:
 
     def has_bool(self: ValidatedData, k: str) -> bool:
         return self.has(k) and ((self._prefix + k) in self._bools)
+
+    def has_decimal(self: ValidatedData, k: str) -> bool:
+        return self.has(k) and ((self._prefix + k) in self._decimals)
+
+    def has_bigint(self: ValidatedData, k: str) -> bool:
+        return self.has(k) and ((self._prefix + k) in self._bigints)
 
     def has_list_str(self: ValidatedData, k: str) -> bool:
         return self.has(k) and ((self._prefix + k) in self._list_strs)
@@ -384,7 +448,7 @@ class ValidatedData:
         if self.is_null(k):
             return False
         pk: str = self._prefix + k
-        if pk in self._strs or pk in self._ints or pk in self._floats or pk in self._bools:
+        if pk in self._strs or pk in self._ints or pk in self._floats or pk in self._bools or pk in self._decimals or pk in self._bigints:
             return False
         if pk in self._list_strs or pk in self._list_ints or pk in self._list_floats or pk in self._list_bools:
             return False
@@ -401,6 +465,10 @@ class ValidatedData:
         pk: str = self._prefix + k
         if pk in self._list_strs or pk in self._list_ints or pk in self._list_floats or pk in self._list_bools or pk in self._list_objs_len:
             return "array"
+        if pk in self._decimals:
+            return "decimal"
+        if pk in self._bigints:
+            return "bigint"
         if pk in self._bools:
             return "bool"
         if pk in self._floats:
@@ -525,6 +593,10 @@ class ValidationResult:
         w.end_object()
         return w.build()
 
+enum ValidationOutcome[T]:
+    Ok(value: T)
+    Err(errors: list[FieldError])
+
 class Result[T]:
     is_ok: bool
     val: T | None
@@ -555,6 +627,13 @@ class Result[T]:
         if v is None:
             return fallback
         return v
+
+    def to_outcome(self) -> ValidationOutcome[T]:
+        if self.is_ok:
+            v: T | None = self.val
+            if v is not None:
+                return ValidationOutcome.Ok(v)
+        return ValidationOutcome.Err(self.errors)
 
     def errors_json(self) -> str:
         w: JsonWriter = JsonWriter()

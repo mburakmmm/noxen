@@ -1,0 +1,173 @@
+# csv_adapter.nox — Pure-Nox RFC 4180 CSV validation, streaming, and serialization adapter via nox.csv.
+
+import nox.csv
+import nox.db
+import nox.decimal
+import nox.bigint
+import schema
+import core
+import errors
+import models
+from nox.csv import CsvError
+from nox.db import Row
+from schema import Schema, Field
+from core import ValidatedData, ValidationResult, Result, ValidationOutcome
+from errors import FieldError, CODE_INVALID_CSV
+from models import ModelSchema
+
+MAX_CSV_INPUT_BYTES: int = 10485760
+
+def _csv_error_result(path: str, message: str, actual: str) -> ValidationResult:
+    d: ValidatedData = ValidatedData()
+    errs: list[FieldError] = []
+    errs.append(FieldError(path, CODE_INVALID_CSV, message, "valid RFC 4180 CSV", actual))
+    return ValidationResult(False, d, errs)
+
+def _row_from_csv_cells(headers: list[str], cells: list[str], empty_as_null: bool) -> Row:
+    flags: list[bool] = []
+    i: int = 0
+    while i < len(cells):
+        if empty_as_null and len(cells[i]) == 0:
+            flags.append(True)
+        else:
+            flags.append(False)
+        i = i + 1
+    return Row(cells, flags, headers)
+
+def validate_csv_row(s: Schema, headers: list[str], cells: list[str], row_index: int = 0, empty_as_null: bool = False) -> ValidationResult:
+    if len(cells) != len(headers):
+        return _csv_error_result(
+            "row[" + str(row_index) + "]",
+            "CSV row column count (" + str(len(cells)) + ") does not match header count (" + str(len(headers)) + ")",
+            str(len(cells)) + " columns"
+        )
+    row: Row = _row_from_csv_cells(headers, cells, empty_as_null)
+    return s.validate_row(row)
+
+# Lazily streams and validates each CSV record (skipping the header row).
+def stream_csv(s: Schema, csv_text: str, empty_as_null: bool = False) -> Iterator[ValidationResult]:
+    if len(csv_text) > MAX_CSV_INPUT_BYTES:
+        yield _csv_error_result("root", "CSV input exceeds maximum allowed byte limit", str(len(csv_text)) + " bytes")
+        return
+
+    parsed_rows: list[list[str]] = []
+    parse_err: str = ""
+    try:
+        parsed_rows = nox.csv.parse(csv_text)
+    except CsvError as e:
+        parse_err = e.message
+
+    if len(parse_err) > 0:
+        yield _csv_error_result("root", "Malformed CSV syntax: " + parse_err, "syntax error")
+        return
+
+    if len(parsed_rows) <= 1:
+        return
+
+    headers: list[str] = parsed_rows[0]
+    i: int = 1
+    while i < len(parsed_rows):
+        cells: list[str] = parsed_rows[i]
+        # Skip single empty trailing row if present
+        if i == len(parsed_rows) - 1 and len(cells) == 1 and len(cells[0]) == 0 and len(headers) > 1:
+            i = i + 1
+        else:
+            yield validate_csv_row(s, headers, cells, i - 1, empty_as_null)
+            i = i + 1
+
+def validate_csv(s: Schema, csv_text: str, empty_as_null: bool = False) -> list[ValidationResult]:
+    out: list[ValidationResult] = []
+    for res in stream_csv(s, csv_text, empty_as_null):
+        out.append(res)
+    return out
+
+def _field_cell_str(f: Field, d: ValidatedData) -> str:
+    if d.is_null(f.name) or not d.has(f.name):
+        return ""
+    if f.kind == "string":
+        return d.get_str(f.name)
+    if f.kind == "int":
+        return str(d.get_int(f.name))
+    if f.kind == "float":
+        return str(d.get_float(f.name))
+    if f.kind == "bool":
+        if d.get_bool(f.name):
+            return "true"
+        return "false"
+    if f.kind == "decimal":
+        return str(d.get_decimal(f.name))
+    if f.kind == "bigint":
+        return d.get_bigint(f.name).to_str()
+    return ""
+
+def _csv_headers(s: Schema) -> list[str]:
+    headers: list[str] = []
+    i: int = 0
+    while i < len(s.fields):
+        f: Field = s.fields[i]
+        if len(f.json_name) > 0:
+            headers.append(f.json_name)
+        else:
+            headers.append(f.name)
+        i = i + 1
+    return headers
+
+def _csv_row_cells(s: Schema, d: ValidatedData) -> list[str]:
+    cells: list[str] = []
+    i: int = 0
+    while i < len(s.fields):
+        cells.append(_field_cell_str(s.fields[i], d))
+        i = i + 1
+    return cells
+
+def dump_csv_row(s: Schema, d: ValidatedData) -> str:
+    return nox.csv.dump_row(_csv_row_cells(s, d))
+
+def dump_csv(s: Schema, items: list[ValidatedData]) -> str:
+    rows: list[list[str]] = []
+    rows.append(_csv_headers(s))
+    i: int = 0
+    while i < len(items):
+        rows.append(_csv_row_cells(s, items[i]))
+        i = i + 1
+    return nox.csv.dump(rows)
+
+class CsvModelAdapter[T]:
+    model: ModelSchema[T]
+
+    def __init__(self, model: ModelSchema[T]) -> None:
+        self.model = model
+
+    def validate(self, csv_text: str, empty_as_null: bool = False) -> list[ValidationResult]:
+        return validate_csv(self.model.schema, csv_text, empty_as_null)
+
+    def stream(self, csv_text: str, empty_as_null: bool = False) -> Iterator[ValidationResult]:
+        return stream_csv(self.model.schema, csv_text, empty_as_null)
+
+    def parse(self, csv_text: str, empty_as_null: bool = False) -> Iterator[Result[T]]:
+        for vr in stream_csv(self.model.schema, csv_text, empty_as_null):
+            if vr.is_valid:
+                f_fn: (ValidatedData) -> T = self.model.factory
+                obj: T = f_fn(vr.data)
+                yield Result[T](True, obj, [])
+            else:
+                yield Result[T](False, None, vr.errors)
+
+    def parse_outcomes(self, csv_text: str, empty_as_null: bool = False) -> Iterator[ValidationOutcome[T]]:
+        for r in self.parse(csv_text, empty_as_null):
+            yield r.to_outcome()
+
+    def parse_all(self, csv_text: str, empty_as_null: bool = False) -> list[Result[T]]:
+        out: list[Result[T]] = []
+        for r in self.parse(csv_text, empty_as_null):
+            out.append(r)
+        return out
+
+    def dump(self, items: list[T], unparser: (T) -> ValidatedData) -> str:
+        rows_data: list[ValidatedData] = []
+        i: int = 0
+        while i < len(items):
+            u: (T) -> ValidatedData = unparser
+            rows_data.append(u(items[i]))
+            i = i + 1
+        return dump_csv(self.model.schema, rows_data)

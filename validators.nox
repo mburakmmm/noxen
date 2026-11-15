@@ -3,7 +3,10 @@
 import nox.url
 import nox.regex
 import nox.strings
+import nox.uuid
+import nox.timezone
 from nox.url import URL, UrlError
+from nox.timezone import TimezoneError
 
 def is_valid_email(s: str) -> bool:
     if nox.strings.contains(s, " "):
@@ -122,6 +125,31 @@ def is_valid_uuid(s: str) -> bool:
                 return False
         i = i + 1
     return True
+
+def is_valid_uuid7(s: str) -> bool:
+    if not is_valid_uuid(s):
+        return False
+    if nox.strings.byte_at(s, 14) != 55:
+        return False
+    v: int = nox.strings.byte_at(s, 19)
+    if v != 56 and v != 57 and v != 65 and v != 66 and v != 97 and v != 98:
+        return False
+    try:
+        ts: int = nox.uuid.uuid7_timestamp_ms(s)
+        return ts >= 0
+    except ValueError as e:
+        return False
+
+def is_valid_timezone(s: str) -> bool:
+    if len(s) == 0:
+        return False
+    if not nox.timezone.is_supported():
+        return s == "UTC" or s == "Etc/UTC"
+    try:
+        nox.timezone.utc_offset(s, 0)
+        return True
+    except TimezoneError as e:
+        return False
 
 # Checks if a floating point value safely represents an integer without precision loss.
 def is_valid_int(n: float) -> bool:

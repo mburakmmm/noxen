@@ -1,0 +1,61 @@
+# pcre2_adapter_test.nox — Tests optional desktop JIT PCRE2 regex validation hooks (lookahead, backreferences, named groups).
+
+import nox.test
+import nox.pcre2
+import schema
+import core
+import errors
+import pcre2_adapter
+from nox.pcre2 import Match, Pcre2Error, IGNORECASE
+from schema import Schema
+from core import ValidationResult
+from errors import CODE_PATTERN_MISMATCH
+from pcre2_adapter import pcre2_supported, pcre2_jit_supported, CompiledPcre2Pattern, compile_pcre2_pattern, compile_pcre2_validator, pcre2_full_match_ok
+
+def test_pcre2_lookahead_and_backreference_validators() -> None:
+    nox.test.assert_true(pcre2_supported(), "PCRE2 available on desktop host")
+    # Note: jit_supported() may vary on restricted sandboxes; API must run cleanly either way
+    _jit_flag: bool = pcre2_jit_supported()
+
+    # Password policy with PCRE2 lookaheads + secret redaction
+    pw_pat: str = "^(?=.*[A-Z])(?=.*[a-z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{10,}$"
+    # Backreference validation for matching mirrored token e.g. "alpha-alpha"
+    mirror_pat: str = "^(?P<tok>[a-z]{2,12})-(?P=tok)$"
+
+    s: Schema = Schema("SecurityPolicy")
+    s.field_str("password").secret()
+    s.field_str("mirror_code")
+    s.add_validator(compile_pcre2_validator("password", pw_pat, "Password lacks complexity", 0, True, True))
+    s.add_validator(compile_pcre2_validator("mirror_code", mirror_pat, "Mirror code must repeat first segment"))
+
+    vr_ok: ValidationResult = s.validate_json("{\"password\": \"Str0ng!Pass1\", \"mirror_code\": \"noxen-noxen\"}")
+    nox.test.assert_true(vr_ok.is_valid, "Strong password + valid backreference pass PCRE2 validator")
+
+    vr_bad_pw: ValidationResult = s.validate_json("{\"password\": \"weakpass12\", \"mirror_code\": \"noxen-noxen\"}")
+    nox.test.assert_true(not vr_bad_pw.is_valid, "Lookahead rejects missing uppercase/symbol")
+    nox.test.assert_eq_str(vr_bad_pw.errors[0].code, CODE_PATTERN_MISMATCH, "error code is pattern_mismatch")
+    nox.test.assert_eq_str(vr_bad_pw.errors[0].actual, "[REDACTED]", "secret password redacted in PCRE2 FieldError")
+
+    vr_bad_backref: ValidationResult = s.validate_json("{\"password\": \"Str0ng!Pass1\", \"mirror_code\": \"alpha-beta\"}")
+    nox.test.assert_true(not vr_bad_backref.is_valid, "Backreference rejects mismatched halves")
+    nox.test.assert_eq_str(vr_bad_backref.errors[0].code, CODE_PATTERN_MISMATCH, "backref mismatch emits pattern_mismatch")
+
+    # Named capture inspection via CompiledPcre2Pattern
+    compiled: CompiledPcre2Pattern = compile_pcre2_pattern("^(?P<env>prod|staging)-(?P<id>\\d+)$", IGNORECASE, True)
+    m_opt: Match | None = compiled.full_match("PROD-404")
+    nox.test.assert_true(m_opt is not None, "IGNORECASE full_match succeeded")
+    if m_opt is not None:
+        nox.test.assert_eq_str(m_opt.named("env"), "PROD", "named capture 'env' extracted")
+        nox.test.assert_eq_str(m_opt.named("id"), "404", "named capture 'id' extracted")
+
+    # Invalid regex throws Pcre2Error cleanly
+    invalid_caught: bool = False
+    try:
+        _bad: CompiledPcre2Pattern = compile_pcre2_pattern("([unclosed")
+    except Pcre2Error as e:
+        invalid_caught = True
+    nox.test.assert_true(invalid_caught, "malformed regex raises Pcre2Error")
+    nox.test.assert_true(not pcre2_full_match_ok("([unclosed", "abc"), "pcre2_full_match_ok handles bad pattern safely")
+
+test_pcre2_lookahead_and_backreference_validators()
+print("pcre2_adapter_test passed")

@@ -1,0 +1,144 @@
+# enum_union_test.nox — Tests for ValidationOutcome[T] enum/match integration and Discriminated Unions.
+
+import nox.test
+import nox.json
+import schema
+import core
+import errors
+import models
+from schema import Schema, UnionSchema
+from core import ValidationResult, ValidatedData, ValidationOutcome, Result
+from models import ModelSchema, BidirectionalModel
+from errors import FieldError, CODE_MISSING_FIELD, CODE_TYPE_MISMATCH, CODE_CHOICE_MISMATCH, CODE_OUT_OF_RANGE
+
+class Order:
+    id: int
+    item: str
+
+    def __init__(self, id: int, item: str) -> None:
+        self.id = id
+        self.item = item
+
+def build_order(d: ValidatedData) -> Order:
+    return Order(d.get_int("id"), d.get_str("item"))
+
+def unparse_order(o: Order) -> ValidatedData:
+    d: ValidatedData = ValidatedData()
+    d.set_int("id", o.id)
+    d.set_str("item", o.item)
+    return d
+
+def test_validation_outcome_match_case() -> None:
+    s: Schema = Schema("Order")
+    s.field_int("id").min_i(1)
+    s.field_str("item").min_length(2)
+
+    ms: ModelSchema[Order] = ModelSchema[Order](s, build_order)
+    bm: BidirectionalModel[Order] = BidirectionalModel[Order](ms, unparse_order)
+
+    # Match on Ok variant
+    out_ok: ValidationOutcome[Order] = bm.parse_outcome_json("{\"id\": 42, \"item\": \"laptop\"}")
+    matched_ok: bool = False
+    match out_ok:
+        case ValidationOutcome.Ok(order):
+            nox.test.assert_eq_int(order.id, 42, "matched Order.id == 42")
+            nox.test.assert_eq_str(order.item, "laptop", "matched Order.item == laptop")
+            matched_ok = True
+        case ValidationOutcome.Err(errs):
+            matched_ok = False
+    nox.test.assert_true(matched_ok, "ValidationOutcome.Ok branch executed cleanly")
+
+    # Match on Err variant
+    out_err: ValidationOutcome[Order] = bm.parse_outcome_json("{\"id\": 0, \"item\": \"x\"}")
+    matched_err: bool = False
+    match out_err:
+        case ValidationOutcome.Ok(order):
+            matched_err = False
+        case ValidationOutcome.Err(errs):
+            nox.test.assert_eq_int(len(errs), 2, "two validation errors collected")
+            nox.test.assert_eq_str(errs[0].code, CODE_OUT_OF_RANGE, "id error code preserved")
+            matched_err = True
+    nox.test.assert_true(matched_err, "ValidationOutcome.Err branch executed cleanly")
+
+    # Result[T].to_outcome() equivalence
+    r: Result[Order] = ms.parse_json("{\"id\": 7, \"item\": \"pen\"}")
+    out2: ValidationOutcome[Order] = r.to_outcome()
+    match out2:
+        case ValidationOutcome.Ok(ord2):
+            nox.test.assert_eq_int(ord2.id, 7, "to_outcome converts Result.Ok")
+        case ValidationOutcome.Err(_):
+            nox.test.assert_true(False, "to_outcome should produce Ok")
+
+def test_discriminated_unions() -> None:
+    click_s: Schema = Schema("ClickEvent")
+    click_s.field_int("x").min_i(0)
+    click_s.field_int("y").min_i(0)
+
+    purchase_s: Schema = Schema("PurchaseEvent")
+    purchase_s.field_str("currency").in_choices(["USD", "EUR", "TRY"])
+    purchase_s.field_float("total").gt(0.0)
+
+    ev_union: UnionSchema = UnionSchema("EventPayload", "kind").variant("click", click_s).variant("purchase", purchase_s)
+
+    # 1. Valid standalone union variants + round-trip
+    r_click: ValidationResult = ev_union.validate_json("{\"kind\": \"click\", \"x\": 10, \"y\": 25}")
+    nox.test.assert_true(r_click.is_valid, "click variant validated cleanly under POLICY_FORBID")
+    nox.test.assert_eq_str(r_click.data.get_str("kind"), "click", "discriminator preserved in ValidatedData")
+    nox.test.assert_eq_int(r_click.data.get_int("x"), 10, "variant field x matches")
+
+    dumped_click: str = ev_union.dump(r_click.data)
+    rt_click: ValidationResult = ev_union.validate_json(dumped_click)
+    nox.test.assert_true(rt_click.is_valid, "UnionSchema round-trip preserves discriminator and fields")
+    nox.test.assert_eq_int(rt_click.data.get_int("y"), 25, "round-trip field y matches")
+
+    # 2. Missing / non-string / unknown discriminator errors
+    r_miss: ValidationResult = ev_union.validate_json("{\"x\": 1, \"y\": 2}")
+    nox.test.assert_true(not r_miss.is_valid, "missing discriminator fails")
+    nox.test.assert_eq_str(r_miss.errors[0].code, CODE_MISSING_FIELD, "missing discriminator emits missing_field")
+    nox.test.assert_eq_str(r_miss.errors[0].path, "kind", "missing discriminator path is 'kind'")
+
+    r_type: ValidationResult = ev_union.validate_json("{\"kind\": 123}")
+    nox.test.assert_true(not r_type.is_valid, "non-string discriminator fails")
+    nox.test.assert_eq_str(r_type.errors[0].code, CODE_TYPE_MISMATCH, "non-string discriminator emits type_mismatch")
+
+    r_unk: ValidationResult = ev_union.validate_json("{\"kind\": \"scroll\"}")
+    nox.test.assert_true(not r_unk.is_valid, "unknown discriminator fails")
+    nox.test.assert_eq_str(r_unk.errors[0].code, CODE_CHOICE_MISMATCH, "unknown discriminator emits choice_mismatch")
+
+    # 3. Variant constraint failure with path prefix when embedded in Envelope Schema
+    env_s: Schema = Schema("Envelope")
+    env_s.field_str("event_id").min_length(1)
+    env_s.field_union("payload", ev_union)
+    env_s.field_list_union("history", ev_union).optional()
+
+    r_env_bad: ValidationResult = env_s.validate_json(
+        "{\"event_id\": \"e1\", \"payload\": {\"kind\": \"purchase\", \"currency\": \"XYZ\", \"total\": -5.0}, \"history\": [{\"kind\": \"click\", \"x\": -1, \"y\": 2}]}"
+    )
+    nox.test.assert_true(not r_env_bad.is_valid, "invalid nested union and list[union] fail")
+    nox.test.assert_eq_str(r_env_bad.errors[0].path, "payload.currency", "nested union path accurate")
+    nox.test.assert_eq_str(r_env_bad.errors[1].path, "payload.total", "nested union second error path accurate")
+    nox.test.assert_eq_str(r_env_bad.errors[2].path, "history[0].x", "list[union] indexed path accurate")
+
+    # 4. Valid nested union + list[union] + dump round-trip + validate_data parity
+    r_env_ok: ValidationResult = env_s.validate_json(
+        "{\"event_id\": \"e2\", \"payload\": {\"kind\": \"purchase\", \"currency\": \"TRY\", \"total\": 99.5}, \"history\": [{\"kind\": \"click\", \"x\": 3, \"y\": 4}]}"
+    )
+    nox.test.assert_true(r_env_ok.is_valid, "valid nested union + list[union] accepted")
+    rd_env: ValidationResult = env_s.validate_data(r_env_ok.data)
+    nox.test.assert_true(rd_env.is_valid, "validate_data validates nested union + list[union]")
+    env_dumped: str = env_s.dump(r_env_ok.data)
+    rt_env: ValidationResult = env_s.validate_json(env_dumped)
+    nox.test.assert_true(rt_env.is_valid, "Envelope with nested union + list[union] round-trips")
+
+    # 5. JSON Schema Draft 2020-12 emission ($defs + oneOf + discriminator)
+    js_str: str = env_s.to_json_schema()
+    js_v: JsonValue = nox.json.parse(js_str)
+    defs: JsonValue = nox.json.get(js_v, "$defs")
+    ev_def: JsonValue = nox.json.get(defs, "EventPayload")
+    nox.test.assert_true(nox.json.is_array(nox.json.get(ev_def, "oneOf")), "oneOf array emitted for union")
+    disc: JsonValue = nox.json.get(ev_def, "discriminator")
+    nox.test.assert_eq_str(nox.json.as_string(nox.json.get(disc, "propertyName")), "kind", "discriminator propertyName matches")
+
+test_validation_outcome_match_case()
+test_discriminated_unions()
+print("enum_union_test passed")

@@ -1,15 +1,16 @@
 # Compatibility Matrix & Environment Audit — Noxen
 
-> Status: Verified against `noxc 2.0.63` on Darwin arm64, Linux x86_64, Windows x86_64.
+> Status: Verified against `noxc 2.1.186` on Darwin arm64 (LLVM & QBE backends, plus `wasm32-wasi` core check/build). Linux and Windows CI runners configured at `v2.1.186`.
 
 ## 1. Toolchain & Runtime Baseline
 
 | Attribute | Verified Value | Evidence |
 |---|---|---|
-| Compiler version | `noxc 2.0.63` (supports up to `v2.0.68` language specifications) | `noxc --version` output |
+| Compiler version | `noxc 2.1.186` | `noxc --version` output |
 | Compiler path | `/Users/melihburakmemis/.nox-lang/bin/noxc` | `which noxc` |
-| Default backend | LLVM (`--backend llvm`) | `noxc --help` / `docs/tools/noxc.md` |
-| Fallback backend | QBE (`--backend qbe`) | Freestanding / line debug (`-g`) |
+| Default backend | LLVM (`--backend llvm`) | `noxc --help` |
+| Fallback backend | QBE (`--backend qbe`) | `--target` / `-g` / freestanding |
+| WebAssembly target | `noxc build --target wasm32-wasi` | Verified for core `noxen` & `basic_model.nox` |
 | Host platform | macOS Darwin arm64 (`macos-arm64`) | `uname -s -m` |
 | Build command | `noxc build <file.nox>` | Verified with `noxc build` |
 | Run command | `noxc run <file.nox>` | Verified with `noxc run` |
@@ -186,6 +187,13 @@
 
 ### Automated LLVM & QBE Backend Parity
 - **Finding**: Differences in intermediate representations or calling conventions between LLVM and QBE backends can introduce silent behavioral divergence on complex string manipulation or monomorphised generic classes.
-- **Decision**: Implemented `scripts/verify_backend_parity.py` running 7 core test and service suites across both backends. Verifies 100% byte-for-byte stdout, stderr, and exit code equivalence.
+- **Decision**: Implemented `scripts/verify_backend_parity.py` running core test and service suites across both backends, verifying structured semantic parity (`NOXEN_RESULT_JSON:`) and stdout/exit equivalence.
 
+## 9. Nox 2.1.186 Upgrade, Core Portability & Desktop-Only Isolation (v0.10.0 – v0.11.0)
+
+- **64-bit Integer JSON Parsing (`nox.json.as_int`)**: Nox `2.1.186` exposes `as_int(v)` and `number_text(v)`. Core `Schema.validate_at` decodes integers up to full signed `int64`, rejects fractions, and offers opt-in `.safe_int53()`.
+- **Reflection Parameter Mangling**: Cross-module imported stdlib types (such as `Decimal` and `BigInt`) appear in `nox.reflect.class_init_param_type` as `nox_decimal_Decimal` and `nox_bigint_BigInt`; `derive_from_class_internal` normalizes both dotted prefixes and these mangled names before class resolution.
+- **Generic Function Imported Attribute Monomorphisation**: Accessing attributes of an imported class directly inside a standalone generic function (e.g. `HttpRequest.body`) can trigger generic checker lookup failures; wrapping attribute reads in a non-generic helper (`request_body`) resolves cleanly across LLVM, QBE, and WASM.
+- **`wasm32-wasi` Core Isolation Boundary**: `nox.yyjson` and `nox.pcre2` depend on `noxclibs.a` (and `dynamic_code` for PCRE2 JIT) and are unsupported on WebAssembly and mobile targets. Therefore `yyjson_adapter.nox` and `pcre2_adapter.nox` are strictly standalone optional modules and are never imported by `noxen.nox`, `schema.nox`, `core.nox`, `models.nox`, `csv_adapter.nox`, `http_adapter.nox`, or `protobuf_adapter.nox`.
+- **`yyjson` Duplicate-Key Policy Caveat**: As documented in `nox.yyjson`, `yyjson` does not reject duplicate keys in JSON objects (unlike `nox.json`, which strictly errors on duplicate keys). Applications enforcing strict RFC 8259 anti-smuggling duplicate-key rejection must use core `Schema.validate_json()`.
 

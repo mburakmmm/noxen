@@ -29,6 +29,9 @@ CODE_MAX_ERRORS_EXCEEDED: str = "max_errors_exceeded"
 CODE_CUSTOM: str = "custom_validation_error"
 CODE_INVALID_TOML: str = "invalid_toml"
 CODE_INVALID_YAML: str = "invalid_yaml"
+CODE_INVALID_CSV: str = "invalid_csv"
+CODE_INVALID_PROTOBUF: str = "invalid_protobuf"
+CODE_INVALID_TIMEZONE: str = "invalid_timezone"
 
 class FieldError:
     path: str

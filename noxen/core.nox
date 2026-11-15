@@ -1,2 +1,2 @@
 import core
-from core import ValidatedData, ValidationResult, Result
+from core import ValidatedData, ValidationResult, Result, ValidationOutcome

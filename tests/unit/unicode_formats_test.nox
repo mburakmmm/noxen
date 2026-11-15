@@ -1,0 +1,98 @@
+# unicode_formats_test.nox — Tests for Unicode normalizers, Turkish case folding, UUIDv7, and IANA timezone validation.
+
+import nox.test
+import nox.uuid
+import nox.timezone
+import schema
+import core
+import errors
+import models
+from schema import Schema
+from core import ValidationResult
+from errors import CODE_INVALID_UUID, CODE_INVALID_TIMEZONE, CODE_STRING_TOO_SHORT, CODE_CHOICE_MISMATCH
+from models import UUIDMixin
+
+class Entity(UUIDMixin):
+    label: str
+
+    def __init__(self) -> None:
+        self.id = ""
+        self.label = ""
+
+def test_unicode_normalization_and_sanitizers() -> None:
+    s: Schema = Schema("ProfileText")
+    # NFD "e\u0301" ("cafe\u0301") -> NFC "caf\u00e9" (length 4 instead of 5)
+    s.field_str("name").unicode_normalize("NFC").strip().min_length(4).max_length(4)
+    s.field_str("tr_city_lower").strip().lower_tr().in_choices(["istanbul", "ışık", "diyarbakır"])
+    s.field_str("tr_city_upper").strip().upper_tr().in_choices(["İSTANBUL", "IŞIK"])
+    s.field_str("code").strip().to_upper().min_length(3)
+
+    # e + combining acute accent (\u0301)
+    nfd_cafe: str = "  cafe\u0301  "
+    r1: ValidationResult = s.validate_json(
+        "{\"name\": \"  cafe\\u0301  \", \"tr_city_lower\": \" İSTANBUL \", \"tr_city_upper\": \" ışık \", \"code\": \" ab12 \"}"
+    )
+    nox.test.assert_true(r1.is_valid, "Normalized and stripped Turkish/Unicode fields pass validation")
+    nox.test.assert_eq_str(r1.data.get_str("name"), "café", "NFC normalization + trim applied before length check")
+    nox.test.assert_eq_str(r1.data.get_str("tr_city_lower"), "istanbul", "lower_tr folds dotted capital İ to i")
+    nox.test.assert_eq_str(r1.data.get_str("tr_city_upper"), "IŞIK", "upper_tr folds dotless ı to I")
+    nox.test.assert_eq_str(r1.data.get_str("code"), "AB12", "to_upper + strip applied")
+
+    # After strip(), too-short string fails min_length even if padded with spaces
+    r2: ValidationResult = s.validate_json(
+        "{\"name\": \"café\", \"tr_city_lower\": \"istanbul\", \"tr_city_upper\": \"IŞIK\", \"code\": \"   a   \"}"
+    )
+    nox.test.assert_true(not r2.is_valid, "Whitespace-padded short string fails min_length after strip()")
+    nox.test.assert_eq_str(r2.errors[0].code, CODE_STRING_TOO_SHORT, "string_too_short code emitted")
+
+    # validate_data parity for sanitizers
+    rd: ValidationResult = s.validate_data(r1.data)
+    nox.test.assert_true(rd.is_valid, "validate_data agrees with validate_json after normalization")
+
+    # Invalid Unicode form raises ValueError
+    bad_form: bool = False
+    try:
+        Schema("Bad").field_str("x").unicode_normalize("XYZ")
+    except ValueError as e:
+        bad_form = True
+    nox.test.assert_true(bad_form, "Invalid Unicode normalization form raises ValueError")
+    ignore_val: str = nfd_cafe
+
+def test_uuid7_and_timezone_formats() -> None:
+    s: Schema = Schema("EventRecord")
+    s.field_str("event_id").uuid7()
+    s.field_str("tz").timezone()
+
+    u7: str = nox.uuid.uuid7()
+    u4: str = nox.uuid.uuid4()
+
+    # Valid UUIDv7 + valid timezone
+    r1: ValidationResult = s.validate_json("{\"event_id\": \"" + u7 + "\", \"tz\": \"Europe/Istanbul\"}")
+    nox.test.assert_true(r1.is_valid, "Generated UUIDv7 and Europe/Istanbul accepted")
+
+    # UUIDv4 must be rejected by .uuid7()
+    r2: ValidationResult = s.validate_json("{\"event_id\": \"" + u4 + "\", \"tz\": \"UTC\"}")
+    nox.test.assert_true(not r2.is_valid, "UUIDv4 rejected by .uuid7()")
+    nox.test.assert_eq_str(r2.errors[0].code, CODE_INVALID_UUID, "invalid_uuid code emitted for non-v7 UUID")
+
+    # Invalid IANA timezone rejected
+    if nox.timezone.is_supported():
+        r3: ValidationResult = s.validate_json("{\"event_id\": \"" + u7 + "\", \"tz\": \"Mars/Olympus_Mons\"}")
+        nox.test.assert_true(not r3.is_valid, "Unknown timezone rejected")
+        nox.test.assert_eq_str(r3.errors[0].code, CODE_INVALID_TIMEZONE, "invalid_timezone code emitted")
+
+    # UUIDMixin helpers
+    e: Entity = Entity()
+    gid7: str = e.generate_v7()
+    nox.test.assert_true(nox.uuid.is_valid(gid7), "UUIDMixin.generate_v7 returns valid UUID")
+    nox.test.assert_eq_str(e.id, gid7, "UUIDMixin.generate_v7 sets self.id")
+    gid4: str = e.generate_v4()
+    nox.test.assert_true(nox.uuid.is_valid(gid4), "UUIDMixin.generate_v4 returns valid UUID")
+
+    # JSON Schema includes format annotations
+    js: str = s.to_json_schema()
+    nox.test.assert_true(len(js) > 0, "to_json_schema generates valid output")
+
+test_unicode_normalization_and_sanitizers()
+test_uuid7_and_timezone_formats()
+print("unicode_formats_test passed")
