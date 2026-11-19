@@ -11,7 +11,7 @@ import http_adapter
 import db_adapter
 import csv_adapter
 
-from errors import FieldError, ValidationError, CODE_CUSTOM, CODE_INVALID_TOML, CODE_INVALID_YAML, CODE_INVALID_CSV, CODE_INVALID_TIMEZONE
+from errors import FieldError, ValidationError, CODE_CUSTOM, CODE_INVALID_TOML, CODE_INVALID_YAML, CODE_INVALID_CSV, CODE_INVALID_TIMEZONE, CODE_INVALID_IP
 from core import ValidatedData, ValidationResult, Result, ValidationOutcome
 from schema import Schema, UnionSchema, Field, POLICY_FORBID, POLICY_IGNORE, POLICY_ALLOW, MODE_REQUIRED, MODE_REQUIRED_NULLABLE, MODE_OPTIONAL, MODE_OPTIONAL_NULLABLE, COERCION_STRICT, COERCION_LAX, auto_schema, schema_from_class
 from models import ModelSchema, BidirectionalModel, Model, auto_model, TimestampMixin, UUIDMixin, SoftDeleteMixin

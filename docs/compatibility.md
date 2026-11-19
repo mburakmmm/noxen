@@ -1,12 +1,12 @@
 # Compatibility Matrix & Environment Audit — Noxen
 
-> Status: Verified against `noxc 2.1.186` on Darwin arm64 (LLVM & QBE backends, plus `wasm32-wasi` core check/build). Linux and Windows CI runners configured at `v2.1.186`.
+> Status: Verified against `noxc 2.2.38` on Darwin arm64 (LLVM & QBE backends, plus `wasm32-wasi` core check/build). Linux and Windows CI runners configured at `v2.2.38`.
 
 ## 1. Toolchain & Runtime Baseline
 
 | Attribute | Verified Value | Evidence |
 |---|---|---|
-| Compiler version | `noxc 2.1.186` | `noxc --version` output |
+| Compiler version | `noxc 2.2.38` | `noxc --version` output |
 | Compiler path | `/Users/melihburakmemis/.nox-lang/bin/noxc` | `which noxc` |
 | Default backend | LLVM (`--backend llvm`) | `noxc --help` |
 | Fallback backend | QBE (`--backend qbe`) | `--target` / `-g` / freestanding |
@@ -196,4 +196,12 @@
 - **Generic Function Imported Attribute Monomorphisation**: Accessing attributes of an imported class directly inside a standalone generic function (e.g. `HttpRequest.body`) can trigger generic checker lookup failures; wrapping attribute reads in a non-generic helper (`request_body`) resolves cleanly across LLVM, QBE, and WASM.
 - **`wasm32-wasi` Core Isolation Boundary**: `nox.yyjson` and `nox.pcre2` depend on `noxclibs.a` (and `dynamic_code` for PCRE2 JIT) and are unsupported on WebAssembly and mobile targets. Therefore `yyjson_adapter.nox` and `pcre2_adapter.nox` are strictly standalone optional modules and are never imported by `noxen.nox`, `schema.nox`, `core.nox`, `models.nox`, `csv_adapter.nox`, `http_adapter.nox`, or `protobuf_adapter.nox`.
 - **`yyjson` Duplicate-Key Policy Caveat**: As documented in `nox.yyjson`, `yyjson` does not reject duplicate keys in JSON objects (unlike `nox.json`, which strictly errors on duplicate keys). Applications enforcing strict RFC 8259 anti-smuggling duplicate-key rejection must use core `Schema.validate_json()`.
+
+## 10. Nox 2.2.38 Adoption: Zero-Allocation Tape Validation, `nox.ip` & Module Visibility (v0.12.0)
+
+- **Zero-Allocation Tape Traversal (`nox.json.pos_*`)**: In Nox `2.2.4+`, tape-backed parsed documents (`v.tpos > 0`) are navigated via `pos_root`/`pos_kind`/`pos_len`/`pos_at`/`pos_key`/`pos_int`/`pos_str`/`pos_number`/`pos_bool`/`pos_dump` in `Schema._validate_pos_ext` and `UnionSchema.validate_pos_at`, eliminating intermediate `JsonValue` heap node allocations on nested objects and arrays while keeping full fallback support for hand-built/scalar `JsonValue` nodes.
+- **`nox.ip` Pure-Nox IP & SSRF Validation**: Added `.ip()`, `.ipv4()`, `.ipv6()`, and `.ip_global()` (plus `@field_format` equivalents and `CODE_INVALID_IP`) backed by `nox.ip`, rejecting octal/abbreviated forms (`010.0.0.1`, `127.1`), zone IDs, and private/loopback/metadata IP ranges on `ip-global` fields (`wasm32-wasi` compatible).
+- **Opt-In `__all__` API Encapsulation Finding (`noxc 2.2.38`)**: Nox `2.2.5+` enforces `__all__` at compile time across modules exporting top-level functions, classes, and enums (`core.nox`, `validators.nox`, `serialization.nox`, `models.nox`, `http_adapter.nox`, `db_adapter.nox`, `yyjson_adapter.nox`, `pcre2_adapter.nox`). However, in `noxc 2.2.38`, `__all__` validation rejects non-function/non-class constants (`CODE_*`, `POLICY_*`, `MODE_*`, `WIRE_*`), while external `from m import CONST` checks against `__all__` if `__all__` is defined. Therefore constant-exporting modules (`errors.nox`, `schema.nox`, `csv_adapter.nox`, `protobuf_adapter.nox`) intentionally omit `__all__` until compiler support is extended to module constants.
+- **Language Ergonomics & Concurrency**: Adopted `type ValidatorFn = (ValidatedData) -> list[FieldError]` (`v2.2.22`), scalar `match` (`v2.2.37`) in `@field_format` decorator resolution, multiline `from ... import (...)` (`v2.1.195`), and verified concurrent multi-task schema validation (`tests/integration/concurrent_validation_test.nox`) leveraging Nox `2.2.25` multi-worker runtime hardening.
+
 

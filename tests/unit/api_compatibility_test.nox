@@ -131,8 +131,8 @@ nox.test.assert_true(sd_mix.is_deleted, "SoftDeleteMixin.mark_deleted callable")
 sd_mix.restore()
 nox.test.assert_true(not sd_mix.is_deleted, "SoftDeleteMixin.restore callable")
 
-# 9. Verify v0.10.0 - v0.11.0 Public Contracts
-from noxen import CODE_INVALID_CSV, CODE_INVALID_PROTOBUF, CODE_INVALID_TIMEZONE, UnionSchema, HttpModelAdapter, CsvModelAdapter, is_json_content_type, json_400, json_415, stream_csv, validate_csv, dump_csv
+# 9. Verify v0.10.0 - v0.12.0 Public Contracts
+from noxen import CODE_INVALID_CSV, CODE_INVALID_PROTOBUF, CODE_INVALID_TIMEZONE, CODE_INVALID_IP, UnionSchema, HttpModelAdapter, CsvModelAdapter, is_json_content_type, json_400, json_415, stream_csv, validate_csv, dump_csv
 import core
 from core import ValidationOutcome
 import protobuf_adapter
@@ -140,6 +140,13 @@ from protobuf_adapter import ProtoMapping, ProtoModelAdapter
 nox.test.assert_eq_str(CODE_INVALID_CSV, "invalid_csv", "CODE_INVALID_CSV stable")
 nox.test.assert_eq_str(CODE_INVALID_PROTOBUF, "invalid_protobuf", "CODE_INVALID_PROTOBUF stable")
 nox.test.assert_eq_str(CODE_INVALID_TIMEZONE, "invalid_timezone", "CODE_INVALID_TIMEZONE stable")
+nox.test.assert_eq_str(CODE_INVALID_IP, "invalid_ip", "CODE_INVALID_IP stable")
+s_ip_compat: Schema = Schema("IpCompat")
+s_ip_compat.field_str("ip_any").ip()
+s_ip_compat.field_str("ip_v4").ipv4()
+s_ip_compat.field_str("ip_v6").ipv6()
+s_ip_compat.field_str("ip_pub").ip_global()
+nox.test.assert_true(s_ip_compat.validate_json("{\"ip_any\":\"::1\",\"ip_v4\":\"127.0.0.1\",\"ip_v6\":\"::1\",\"ip_pub\":\"1.1.1.1\"}").is_valid, "IP validators callable")
 out_ok: ValidationOutcome[ApiUser] = bm.parse_outcome_json("{\"email\":\"test@domain.com\",\"level\":5}")
 matched_api: bool = False
 match out_ok:
@@ -151,5 +158,5 @@ nox.test.assert_true(matched_api, "ValidationOutcome match/case contract")
 pm_compat: ProtoMapping = ProtoMapping(auto_m.schema).auto_tags()
 nox.test.assert_eq_int(len(pm_compat.specs), 2, "ProtoMapping auto_tags contract")
 
-print("NOXEN_RESULT_JSON:{\"test\":\"api_compatibility\",\"symbols_verified\":68,\"valid\":true}")
+print("NOXEN_RESULT_JSON:{\"test\":\"api_compatibility\",\"symbols_verified\":73,\"valid\":true}")
 print("api_compatibility_test passed")

@@ -78,6 +78,10 @@ TARGETS = [
         "path": "tests/unit/validate_data_parity_test.nox",
         "expected_markers": 1,
     },
+    {
+        "path": "tests/unit/ip_formats_test.nox",
+        "expected_markers": 1,
+    },
 ]
 
 MARKER = "NOXEN_RESULT_JSON:"

@@ -18,10 +18,54 @@ import models
 from nox.yyjson import YyValue, YyjsonError
 from nox.decimal import Decimal
 from nox.bigint import BigInt
-from schema import Schema, Field, UnionSchema, POLICY_FORBID, POLICY_IGNORE, POLICY_ALLOW, MODE_REQUIRED, MODE_REQUIRED_NULLABLE, MODE_OPTIONAL, MODE_OPTIONAL_NULLABLE, COERCION_LAX, _validate_string_value, _validate_decimal_value, _validate_bigint_value, _parse_decimal_str, _parse_bigint_str, _try_coerce_int, _try_coerce_float, _try_coerce_bool
+from schema import (
+    Schema,
+    Field,
+    UnionSchema,
+    POLICY_FORBID,
+    POLICY_IGNORE,
+    POLICY_ALLOW,
+    MODE_REQUIRED,
+    MODE_REQUIRED_NULLABLE,
+    MODE_OPTIONAL,
+    MODE_OPTIONAL_NULLABLE,
+    COERCION_LAX,
+    validate_string_value,
+    validate_int_value,
+    validate_float_value,
+    validate_decimal_value,
+    validate_bigint_value,
+    parse_decimal_str,
+    parse_bigint_str,
+    try_coerce_int,
+    try_coerce_float,
+    try_coerce_bool
+)
 from core import ValidatedData, ValidationResult, Result, ValidationOutcome
-from errors import FieldError, CODE_INVALID_JSON, CODE_EXPECTED_OBJECT, CODE_MISSING_FIELD, CODE_UNEXPECTED_NULL, CODE_TYPE_MISMATCH, CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE, CODE_CHOICE_MISMATCH, CODE_ARRAY_TOO_SHORT, CODE_ARRAY_TOO_LONG, CODE_RECURSION_LIMIT, CODE_MAX_ERRORS_EXCEEDED
+from errors import (
+    FieldError,
+    CODE_INVALID_JSON,
+    CODE_EXPECTED_OBJECT,
+    CODE_MISSING_FIELD,
+    CODE_UNEXPECTED_NULL,
+    CODE_TYPE_MISMATCH,
+    CODE_EXTRA_FIELD,
+    CODE_OUT_OF_RANGE,
+    CODE_CHOICE_MISMATCH,
+    CODE_ARRAY_TOO_SHORT,
+    CODE_ARRAY_TOO_LONG,
+    CODE_RECURSION_LIMIT,
+    CODE_MAX_ERRORS_EXCEEDED
+)
 from models import ModelSchema
+
+__all__: list[str] = [
+    "yyjson_supported",
+    "validate_yyjson",
+    "validate_yyjson_relaxed",
+    "validate_yyjson5",
+    "YyjsonModel"
+]
 
 def yyjson_supported() -> bool:
     return nox.yyjson.is_supported()
@@ -57,7 +101,7 @@ def _parse_yy_int(v: YyValue, safe53: bool, allow_lax: bool) -> int | None:
                 return None
         return iv
     elif allow_lax and nox.yyjson.is_string(v):
-        parsed: int | None = _try_coerce_int(nox.yyjson.as_string(v))
+        parsed: int | None = try_coerce_int(nox.yyjson.as_string(v))
         if parsed is not None and safe53:
             if parsed > 9007199254740991 or parsed < -9007199254740991:
                 return None
@@ -72,31 +116,31 @@ def _parse_yy_float(v: YyValue, allow_lax: bool) -> float | None:
             return None
         return raw_f
     elif allow_lax and nox.yyjson.is_string(v):
-        return _try_coerce_float(nox.yyjson.as_string(v))
+        return try_coerce_float(nox.yyjson.as_string(v))
     return None
 
 def _parse_yy_decimal(v: YyValue) -> Decimal | None:
     if nox.yyjson.is_string(v):
-        return _parse_decimal_str(nox.yyjson.as_string(v))
+        return parse_decimal_str(nox.yyjson.as_string(v))
     if nox.yyjson.is_number(v):
         txt: str = ""
         try:
             txt = nox.yyjson.number_text(v)
         except YyjsonError as e:
             return None
-        return _parse_decimal_str(txt)
+        return parse_decimal_str(txt)
     return None
 
 def _parse_yy_bigint(v: YyValue) -> BigInt | None:
     if nox.yyjson.is_string(v):
-        return _parse_bigint_str(nox.yyjson.as_string(v))
+        return parse_bigint_str(nox.yyjson.as_string(v))
     if nox.yyjson.is_integer(v):
         txt: str = ""
         try:
             txt = nox.yyjson.number_text(v)
         except YyjsonError as e:
             return None
-        return _parse_bigint_str(txt)
+        return parse_bigint_str(txt)
     return None
 
 def _validate_yy_union(u: UnionSchema, v: YyValue, prefix: str, depth: int) -> ValidationResult:
@@ -139,45 +183,6 @@ def _validate_yy_union(u: UnionSchema, v: YyValue, prefix: str, depth: int) -> V
     if res.is_valid:
         res.data.set_str(u.discriminator, tag)
     return res
-
-def _check_int_bounds_and_choices(field: Field, full_path: str, iv: int, err_list: list[FieldError]) -> None:
-    if field.has_min_int:
-        if field.is_exclusive_min:
-            if iv <= field.min_val_int:
-                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val_int), "> " + str(field.min_val_int), str(iv)))
-        else:
-            if iv < field.min_val_int:
-                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val_int), ">= " + str(field.min_val_int), str(iv)))
-    elif field.has_min:
-        if field.is_exclusive_min:
-            if float(iv) <= field.min_val:
-                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val), "> " + str(field.min_val), str(iv)))
-        else:
-            if float(iv) < field.min_val:
-                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(iv)))
-    if field.has_max_int:
-        if field.is_exclusive_max:
-            if iv >= field.max_val_int:
-                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val_int), "< " + str(field.max_val_int), str(iv)))
-        else:
-            if iv > field.max_val_int:
-                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val_int), "<= " + str(field.max_val_int), str(iv)))
-    elif field.has_max:
-        if field.is_exclusive_max:
-            if float(iv) >= field.max_val:
-                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val), "< " + str(field.max_val), str(iv)))
-        else:
-            if float(iv) > field.max_val:
-                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(iv)))
-    if len(field.choices_int) > 0:
-        matched_i: bool = False
-        cii: int = 0
-        while cii < len(field.choices_int):
-            if field.choices_int[cii] == iv:
-                matched_i = True
-            cii = cii + 1
-        if not matched_i:
-            err_list.append(FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed integer choices", "int choice", str(iv)))
 
 def _validate_yy_at(s: Schema, v: YyValue, prefix: str, depth: int, extra_allowed_key: str) -> ValidationResult:
     data: ValidatedData = ValidatedData()
@@ -281,7 +286,7 @@ def _validate_yy_at(s: Schema, v: YyValue, prefix: str, depth: int, extra_allowe
                     if sv_opt is None:
                         err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected string", "string", _describe_yy_kind(fv_yy)))
                     else:
-                        sv: str = _validate_string_value(field, full_path, sv_opt, err_list)
+                        sv: str = validate_string_value(field, full_path, sv_opt, err_list)
                         data.set_str(field.name, sv)
 
                 elif field.kind == "int":
@@ -290,7 +295,7 @@ def _validate_yy_at(s: Schema, v: YyValue, prefix: str, depth: int, extra_allowe
                         err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected integer", "int", _describe_yy_kind(fv_yy)))
                     else:
                         iv: int = iv_opt
-                        _check_int_bounds_and_choices(field, full_path, iv, err_list)
+                        validate_int_value(field, full_path, iv, err_list)
                         data.set_int(field.name, iv)
 
                 elif field.kind == "float":
@@ -299,20 +304,7 @@ def _validate_yy_at(s: Schema, v: YyValue, prefix: str, depth: int, extra_allowe
                         err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected float", "float", _describe_yy_kind(fv_yy)))
                     else:
                         fl: float = fl_opt
-                        if field.has_min:
-                            if field.is_exclusive_min:
-                                if fl <= field.min_val:
-                                    err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val), "> " + str(field.min_val), str(fl)))
-                            else:
-                                if fl < field.min_val:
-                                    err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(fl)))
-                        if field.has_max:
-                            if field.is_exclusive_max:
-                                if fl >= field.max_val:
-                                    err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val), "< " + str(field.max_val), str(fl)))
-                            else:
-                                if fl > field.max_val:
-                                    err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(fl)))
+                        validate_float_value(field, full_path, fl, err_list)
                         data.set_float(field.name, fl)
 
                 elif field.kind == "bool":
@@ -320,7 +312,7 @@ def _validate_yy_at(s: Schema, v: YyValue, prefix: str, depth: int, extra_allowe
                     if nox.yyjson.is_bool(fv_yy):
                         bv_opt = nox.yyjson.as_bool(fv_yy)
                     elif allow_lax and nox.yyjson.is_string(fv_yy):
-                        bv_opt = _try_coerce_bool(nox.yyjson.as_string(fv_yy))
+                        bv_opt = try_coerce_bool(nox.yyjson.as_string(fv_yy))
                     if bv_opt is None:
                         err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected boolean", "bool", _describe_yy_kind(fv_yy)))
                     else:
@@ -331,7 +323,7 @@ def _validate_yy_at(s: Schema, v: YyValue, prefix: str, depth: int, extra_allowe
                     if dv_opt is None:
                         err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected decimal string or number", "decimal", _describe_yy_kind(fv_yy)))
                     else:
-                        _validate_decimal_value(field, full_path, dv_opt, err_list)
+                        validate_decimal_value(field, full_path, dv_opt, err_list)
                         data.set_decimal(field.name, dv_opt)
 
                 elif field.kind == "bigint":
@@ -339,7 +331,7 @@ def _validate_yy_at(s: Schema, v: YyValue, prefix: str, depth: int, extra_allowe
                     if bg_opt is None:
                         err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected bigint string or integer", "bigint", _describe_yy_kind(fv_yy)))
                     else:
-                        _validate_bigint_value(field, full_path, bg_opt, err_list)
+                        validate_bigint_value(field, full_path, bg_opt, err_list)
                         data.set_bigint(field.name, bg_opt)
 
                 elif field.kind == "object":

@@ -5,6 +5,22 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-11-19
+
+### Added
+- **Zero-Allocation Tape Validation Engine (`nox.json.pos_*`)**:
+  - Upgraded `Schema.validate` and `UnionSchema.validate` to navigate tape-backed parsed documents (`v.tpos > 0`) via `Schema._validate_pos_ext` and `UnionSchema.validate_pos_at` (`pos_root`, `pos_kind`, `pos_len`, `pos_at`, `pos_key`, `pos_find`, `pos_str`, `pos_int`, `pos_number`, `pos_bool`, `pos_dump`), avoiding intermediate `JsonValue` wrapper heap allocations across nested objects and arrays while keeping fallback compatibility for hand-built `JsonValue` trees.
+  - Consolidated shared integer/float/default validation logic (`_validate_int_value`, `_validate_float_value`, `_apply_field_default`, public `validate_int_value` / `validate_float_value`) reused across `schema.nox` and `yyjson_adapter.nox`.
+- **`nox.ip` IPv4 / IPv6 & SSRF-Safe Global IP Validation**:
+  - Added `Field.ip()`, `Field.ipv4()`, `Field.ipv6()`, `Field.ip_global()`, `@field_format("...", "ip" | "ipv4" | "ipv6" | "ip-global")`, and `is_valid_ip`, `is_valid_ipv4`, `is_valid_ipv6`, `is_valid_global_ip` in `validators.nox`.
+  - Added stable error code `CODE_INVALID_IP` (`"invalid_ip"`), JSON Schema Draft 2020-12 format emissions (`ipv4`, `ipv6`, `ip`, `ip-global`), and unit suite `tests/unit/ip_formats_test.nox` covering RFC/IANA SSRF bypasses (`010.0.0.1`, `127.1`, `::ffff:127.0.0.1`, `169.254.169.254`, `fe80::1%eth0`).
+- **API Visibility (`__all__`), Type Aliases & Modern Nox 2.2.38 Ergonomics**:
+  - Added opt-in `__all__` public export enforcement to `core.nox`, `validators.nox`, `serialization.nox`, `models.nox`, `http_adapter.nox`, `db_adapter.nox`, `yyjson_adapter.nox`, and `pcre2_adapter.nox`, keeping internal helpers private at compile time.
+  - Added `type ValidatorFn = (ValidatedData) -> list[FieldError]` in `schema.nox`, converted decorator `@field_format` dispatch to scalar `match`, and adopted multiline `from schema import (...)` in `yyjson_adapter.nox`.
+  - Added `tests/integration/concurrent_validation_test.nox` verifying deterministic `Schema` validation across concurrent `spawn` tasks and `Channel[int]`.
+- **Toolchain & Parity Upgrade (`noxc 2.2.38`)**:
+  - Bumped CI pinned toolchain in `.github/workflows/ci.yml` to `v2.2.38`, expanded `scripts/verify_backend_parity.py` to 15 targets, and updated API compatibility assertions (`73` verified symbols).
+
 ## [0.11.0] - 2026-11-15
 
 ### Added

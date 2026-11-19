@@ -15,7 +15,7 @@ import models
 from nox.protobuf import Writer, Reader, ProtobufError
 from nox.decimal import Decimal
 from nox.bigint import BigInt
-from schema import Schema, Field, POLICY_FORBID, _parse_decimal_str, _parse_bigint_str
+from schema import Schema, Field, POLICY_FORBID, parse_decimal_str, parse_bigint_str
 from core import ValidatedData, ValidationResult, Result, ValidationOutcome
 from errors import FieldError, ValidationError, CODE_INVALID_PROTOBUF, CODE_EXTRA_FIELD, CODE_RECURSION_LIMIT, CODE_TYPE_MISMATCH
 from models import ModelSchema
@@ -269,14 +269,14 @@ class ProtoMapping:
                             data.set_bool(f.name, r.read_bool())
                         elif f.kind == "decimal":
                             ds: str = r.read_string()
-                            d_opt: Decimal | None = _parse_decimal_str(ds)
+                            d_opt: Decimal | None = parse_decimal_str(ds)
                             if d_opt is None:
                                 err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Invalid decimal encoding in protobuf field '" + full_path + "'", "decimal string", ds))
                             else:
                                 data.set_decimal(f.name, d_opt)
                         elif f.kind == "bigint":
                             bgs: str = r.read_string()
-                            bg_opt: BigInt | None = _parse_bigint_str(bgs)
+                            bg_opt: BigInt | None = parse_bigint_str(bgs)
                             if bg_opt is None:
                                 err_list.append(FieldError(full_path, CODE_TYPE_MISMATCH, "Invalid bigint encoding in protobuf field '" + full_path + "'", "bigint string", bgs))
                             else:

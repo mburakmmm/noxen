@@ -5,7 +5,7 @@
 [![CI](https://github.com/mburakmmm/noxen/actions/workflows/ci.yml/badge.svg)](https://github.com/mburakmmm/noxen/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/mburakmmm/noxen?color=007ec6&label=release)](https://github.com/mburakmmm/noxen/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Nox Toolchain](https://img.shields.io/badge/noxc-2.1.186+-00bcd4.svg)](https://noxlang.com)
+[![Nox Toolchain](https://img.shields.io/badge/noxc-2.2.38+-00bcd4.svg)](https://noxlang.com)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20WASM-success.svg)](https://github.com/mburakmmm/noxen/actions)
 [![JSON Schema](https://img.shields.io/badge/JSON%20Schema-Draft%202020--12-792ee5.svg)](https://json-schema.org)
 
@@ -75,11 +75,15 @@
 
 ## Minimum Requirements
 
-* **Compiler**: `noxc 2.1.186` or newer
+* **Compiler**: `noxc 2.2.38` or newer
 * **Backend**: LLVM (default) or QBE (`wasm32-wasi` supported for core `noxen`)
 * **Platform**: macOS (ARM64/x64), Linux (x64/ARM64), Windows (x64), WebAssembly (`wasm32-wasi` for core)
 
-### Highlights (v0.10.0 – v0.11.0 Additions)
+### Highlights (v0.10.0 – v0.12.0 Additions)
+
+* **Zero-Allocation Tape Validation (`nox.json.pos_*`)**: Validates parsed JSON trees via `Schema._validate_pos_ext` and `UnionSchema.validate_pos_at` without allocating intermediate `JsonValue` wrappers across objects and arrays.
+* **IPv4 / IPv6 & SSRF-Safe Global IP Validation (`nox.ip`)**: `.ip()`, `.ipv4()`, `.ipv6()`, `.ip_global()`, and `@field_format` equivalents reject private/loopback/metadata/ambiguous IP bypasses while keeping core 100% WASM-compatible.
+* **Compile-Time `__all__` API Hygiene & Concurrency**: Explicit `__all__` public export boundaries on function/class modules and verified concurrent `spawn`/`Channel` validation safety.
 
 * **Full 64-Bit Integers + `.safe_int53()`**: Lossless `int64` JSON integer decoding (`nox.json.as_int`) with opt-in IEEE-754 53-bit JavaScript interoperability check.
 * **Exact `Decimal` & `BigInt` Support**: Fixed-decimal arithmetic (`decimal_places`, `max_digits`, exact bounds) and arbitrary-precision `BigInt` fields across validation, serialization, and Draft 2020-12 schema generation.

@@ -1,0 +1,68 @@
+# ip_formats_test.nox — Tests nox.ip-backed IPv4, IPv6, IP, and SSRF-safe global IP validators & decorators.
+
+import nox.test
+import schema
+import core
+import errors
+import yyjson_adapter
+from schema import Schema, auto_schema
+from core import ValidationResult
+from errors import CODE_INVALID_IP
+from yyjson_adapter import validate_yyjson
+
+@dataclass
+@field_format("any_ip", "ip")
+@field_format("v4_addr", "ipv4")
+@field_format("v6_addr", "ipv6")
+@field_format("public_ip", "ip-global")
+class NetworkEndpoint:
+    any_ip: str
+    v4_addr: str
+    v6_addr: str
+    public_ip: str
+
+def test_ip_validators_and_ssrf_guards() -> None:
+    s: Schema = auto_schema("NetworkEndpoint")
+
+    # 1. Valid IPv4, IPv6 (including bracketed), and globally routable IP
+    raw_ok: str = "{\"any_ip\": \"[::1]\", \"v4_addr\": \"10.0.0.5\", \"v6_addr\": \"2001:db8::1\", \"public_ip\": \"8.8.8.8\"}"
+    r_ok: ValidationResult = s.validate_json(raw_ok)
+    nox.test.assert_true(r_ok.is_valid, "valid IP endpoints pass")
+
+    # 2. Global IP rejects SSRF targets: loopback, private, link-local metadata, IPv4-mapped loopback, zone ID
+    ssrf_ips: list[str] = [
+        "127.0.0.1",
+        "10.1.2.3",
+        "192.168.1.1",
+        "169.254.169.254",
+        "::ffff:127.0.0.1",
+        "fe80::1%eth0",
+        "010.0.0.1",
+        "127.1"
+    ]
+    si: int = 0
+    while si < len(ssrf_ips):
+        payload: str = "{\"any_ip\": \"1.1.1.1\", \"v4_addr\": \"1.1.1.1\", \"v6_addr\": \"::1\", \"public_ip\": \"" + ssrf_ips[si] + "\"}"
+        r_bad: ValidationResult = s.validate_json(payload)
+        nox.test.assert_true(not r_bad.is_valid, "SSRF/non-global/ambiguous IP rejected: " + ssrf_ips[si])
+        nox.test.assert_eq_str(r_bad.errors[0].code, CODE_INVALID_IP, "error code is invalid_ip")
+        si = si + 1
+
+    # 3. Version checks reject IPv6 in ipv4 field and IPv4 in ipv6 field
+    r_mismatch: ValidationResult = s.validate_json("{\"any_ip\": \"8.8.8.8\", \"v4_addr\": \"::1\", \"v6_addr\": \"8.8.8.8\", \"public_ip\": \"2001:4860:4860::8888\"}")
+    nox.test.assert_true(not r_mismatch.is_valid, "IP version mismatch rejected")
+    nox.test.assert_eq_int(len(r_mismatch.errors), 2, "both ipv4 and ipv6 version mismatches reported")
+    nox.test.assert_eq_str(r_mismatch.errors[0].path, "v4_addr", "v4_addr mismatch")
+    nox.test.assert_eq_str(r_mismatch.errors[1].path, "v6_addr", "v6_addr mismatch")
+
+    # 4. In-memory validate_data + yyjson parity + JSON Schema formats
+    nox.test.assert_true(s.validate_data(r_ok.data).is_valid, "validate_data IP parity")
+    nox.test.assert_true(validate_yyjson(s, raw_ok).is_valid, "yyjson IP parity")
+
+    js: str = s.to_json_schema()
+    nox.test.assert_true(nox.strings.contains(js, "\"format\":\"ipv4\""), "JSON Schema includes ipv4 format")
+    nox.test.assert_true(nox.strings.contains(js, "\"format\":\"ipv6\""), "JSON Schema includes ipv6 format")
+
+test_ip_validators_and_ssrf_guards()
+print("NOXEN_RESULT_JSON:{\"test\":\"ip_formats\",\"valid\":true,\"ssrf_guards_verified\":8,\"schema_formats_verified\":true}")
+print("ip_formats_test passed")

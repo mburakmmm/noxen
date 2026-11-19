@@ -32,6 +32,7 @@ CODE_INVALID_YAML: str = "invalid_yaml"
 CODE_INVALID_CSV: str = "invalid_csv"
 CODE_INVALID_PROTOBUF: str = "invalid_protobuf"
 CODE_INVALID_TIMEZONE: str = "invalid_timezone"
+CODE_INVALID_IP: str = "invalid_ip"
 
 class FieldError:
     path: str

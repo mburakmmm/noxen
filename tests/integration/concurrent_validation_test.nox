@@ -1,0 +1,56 @@
+# concurrent_validation_test.nox — Verifies immutable Schema thread/fiber safety across concurrent spawn workers.
+
+import nox.test
+import schema
+import core
+from schema import Schema, POLICY_FORBID
+from core import ValidationResult
+
+_shared_schema: Schema = Schema("ConcurrentEvent")
+_shared_schema.field_str("event_id").uuid7()
+_shared_schema.field_str("ip").ip_global()
+_shared_schema.field_int("seq").min_i(0).max_i(1000000)
+
+async def worker_validate(worker_id: int, iterations: int, ch: Channel[int]) -> None:
+    ok_count: int = 0
+    err_count: int = 0
+    i: int = 0
+    while i < iterations:
+        if i % 3 == 0:
+            # Invalid SSRF private IP
+            vr_bad: ValidationResult = _shared_schema.validate_json(
+                "{\"event_id\": \"019334e2-7b4d-7000-8000-000000000001\", \"ip\": \"127.0.0.1\", \"seq\": " + str(i) + "}"
+            )
+            if not vr_bad.is_valid:
+                err_count = err_count + 1
+        else:
+            vr_ok: ValidationResult = _shared_schema.validate_json(
+                "{\"event_id\": \"019334e2-7b4d-7000-8000-000000000001\", \"ip\": \"8.8.8.8\", \"seq\": " + str(i) + "}"
+            )
+            if vr_ok.is_valid:
+                ok_count = ok_count + 1
+        i = i + 1
+    await ch.send(ok_count * 1000 + err_count)
+
+async def test_concurrent_shared_schema_validation() -> None:
+    ch: Channel[int] = Channel[int](16)
+    t1: Task[None] = spawn worker_validate(1, 30, ch)
+    t2: Task[None] = spawn worker_validate(2, 30, ch)
+    t3: Task[None] = spawn worker_validate(3, 30, ch)
+    t4: Task[None] = spawn worker_validate(4, 30, ch)
+
+    total_encoded: int = 0
+    w: int = 0
+    while w < 4:
+        total_encoded = total_encoded + await ch.recv()
+        w = w + 1
+
+    await t1
+    await t2
+    await t3
+    await t4
+    # Each worker: 20 ok, 10 rejected -> 20*1000 + 10 = 20010 * 4 = 80040
+    nox.test.assert_eq_int(total_encoded, 80040, "All 4 concurrent workers produced deterministic validation results")
+
+await spawn test_concurrent_shared_schema_validation()
+print("concurrent_validation_test passed")

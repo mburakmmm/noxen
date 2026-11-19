@@ -123,3 +123,7 @@ Database rows (`nox.db.Row`) passed via `DbAdapter[T].parse_row(row)` or `schema
 | `recursion_limit_exceeded` | Input exceeds `max_depth` nesting limit |
 | `max_errors_exceeded` | Input exceeds `max_errors` error accumulation cap |
 | `custom_validation_error` | Custom validator callback failure |
+| `invalid_timezone` | Invalid IANA timezone identifier |
+| `invalid_ip` | Invalid IPv4/IPv6 or non-global SSRF-blocked IP address |
+| `invalid_csv` | Malformed RFC 4180 CSV syntax or column mismatch |
+| `invalid_protobuf` | Malformed protobuf wire payload or payload size overflow |

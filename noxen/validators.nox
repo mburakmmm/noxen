@@ -1,2 +1,2 @@
 import validators
-from validators import is_valid_email, is_valid_url, is_valid_uuid, is_valid_uuid7, is_valid_timezone, is_valid_int, is_valid_date, is_valid_time, is_valid_datetime
+from validators import is_valid_email, is_valid_url, is_valid_uuid, is_valid_uuid7, is_valid_timezone, is_valid_ip, is_valid_ipv4, is_valid_ipv6, is_valid_global_ip, is_valid_int, is_valid_date, is_valid_time, is_valid_datetime

@@ -2,7 +2,7 @@
 
 import nox.reflect
 import errors
-from errors import FieldError, CODE_INVALID_JSON, CODE_EXPECTED_OBJECT, CODE_MISSING_FIELD, CODE_UNEXPECTED_NULL, CODE_TYPE_MISMATCH, CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE, CODE_STRING_TOO_SHORT, CODE_STRING_TOO_LONG, CODE_INVALID_EMAIL, CODE_INVALID_URL, CODE_INVALID_UUID, CODE_INVALID_DATE, CODE_INVALID_TIME, CODE_INVALID_DATETIME, CODE_INVALID_TIMEZONE, CODE_PATTERN_MISMATCH, CODE_CHOICE_MISMATCH, CODE_ARRAY_TOO_SHORT, CODE_ARRAY_TOO_LONG, CODE_RECURSION_LIMIT, CODE_MAX_ERRORS_EXCEEDED, CODE_INVALID_TOML, CODE_INVALID_YAML
+from errors import FieldError, CODE_INVALID_JSON, CODE_EXPECTED_OBJECT, CODE_MISSING_FIELD, CODE_UNEXPECTED_NULL, CODE_TYPE_MISMATCH, CODE_EXTRA_FIELD, CODE_OUT_OF_RANGE, CODE_STRING_TOO_SHORT, CODE_STRING_TOO_LONG, CODE_INVALID_EMAIL, CODE_INVALID_URL, CODE_INVALID_UUID, CODE_INVALID_DATE, CODE_INVALID_TIME, CODE_INVALID_DATETIME, CODE_INVALID_TIMEZONE, CODE_INVALID_IP, CODE_PATTERN_MISMATCH, CODE_CHOICE_MISMATCH, CODE_ARRAY_TOO_SHORT, CODE_ARRAY_TOO_LONG, CODE_RECURSION_LIMIT, CODE_MAX_ERRORS_EXCEEDED, CODE_INVALID_TOML, CODE_INVALID_YAML
 import validators
 import core
 from core import ValidatedData, ValidationResult
@@ -24,6 +24,8 @@ import nox.bigint
 from nox.bigint import BigInt, BigIntError
 from nox.db import Row
 from nox.json import JsonError, JsonWriter
+
+type ValidatorFn = (ValidatedData) -> list[FieldError]
 
 # Presence modes
 MODE_REQUIRED: int = 0
@@ -54,6 +56,131 @@ def _describe_json_kind(v: JsonValue) -> str:
     if nox.json.is_object(v):
         return "object"
     return "unknown"
+
+def _describe_pos_kind(k: int) -> str:
+    if k == 0:
+        return "null"
+    if k == 1:
+        return "bool"
+    if k == 2:
+        return "number"
+    if k == 3:
+        return "string"
+    if k == 4:
+        return "array"
+    if k == 5:
+        return "object"
+    return "unknown"
+
+def _parse_pos_int(doc_v: JsonValue, pos: int, k: int, safe53: bool, allow_lax: bool) -> int | None:
+    if k == 2:
+        try:
+            iv: int = nox.json.pos_int(doc_v, pos)
+            if safe53:
+                if iv > 9007199254740991 or iv < -9007199254740991:
+                    return None
+            return iv
+        except JsonError as e:
+            return None
+    if allow_lax and k == 3:
+        iv_lax: int | None = _try_coerce_int(nox.json.pos_str(doc_v, pos))
+        if iv_lax is not None and safe53:
+            if iv_lax > 9007199254740991 or iv_lax < -9007199254740991:
+                return None
+        return iv_lax
+    return None
+
+def _parse_pos_decimal(doc_v: JsonValue, pos: int, k: int) -> Decimal | None:
+    if k == 3:
+        return _parse_decimal_str(nox.json.pos_str(doc_v, pos))
+    if k == 2:
+        return _parse_decimal_str(nox.json.pos_dump(doc_v, pos))
+    return None
+
+def _parse_pos_bigint(doc_v: JsonValue, pos: int, k: int) -> BigInt | None:
+    if k == 3:
+        return _parse_bigint_str(nox.json.pos_str(doc_v, pos))
+    if k == 2:
+        txt: str = nox.json.pos_dump(doc_v, pos)
+        direct: BigInt | None = _parse_bigint_str(txt)
+        if direct is not None:
+            return direct
+        dec_v: Decimal | None = _parse_decimal_str(txt)
+        if dec_v is not None:
+            norm: Decimal = dec_v.normalize()
+            if norm.exp >= 0:
+                return norm.to_bigint()
+        return None
+    return None
+
+def _validate_int_value(field: Field, full_path: str, iv: int, err_list: list[FieldError]) -> None:
+    if field.has_min_int:
+        if field.is_exclusive_min:
+            if iv <= field.min_val_int:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val_int), "> " + str(field.min_val_int), str(iv)))
+        else:
+            if iv < field.min_val_int:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val_int), ">= " + str(field.min_val_int), str(iv)))
+    elif field.has_min:
+        if field.is_exclusive_min:
+            if float(iv) <= field.min_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val), "> " + str(field.min_val), str(iv)))
+        else:
+            if float(iv) < field.min_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(iv)))
+    if field.has_max_int:
+        if field.is_exclusive_max:
+            if iv >= field.max_val_int:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val_int), "< " + str(field.max_val_int), str(iv)))
+        else:
+            if iv > field.max_val_int:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val_int), "<= " + str(field.max_val_int), str(iv)))
+    elif field.has_max:
+        if field.is_exclusive_max:
+            if float(iv) >= field.max_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val), "< " + str(field.max_val), str(iv)))
+        else:
+            if float(iv) > field.max_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(iv)))
+    if len(field.choices_int) > 0:
+        matched_i: bool = False
+        cii: int = 0
+        while cii < len(field.choices_int):
+            if field.choices_int[cii] == iv:
+                matched_i = True
+            cii = cii + 1
+        if not matched_i:
+            err_list.append(FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed integer choices", "int choice", str(iv)))
+
+def _validate_float_value(field: Field, full_path: str, fv: float, err_list: list[FieldError]) -> None:
+    if field.has_min:
+        if field.is_exclusive_min:
+            if fv <= field.min_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val), "> " + str(field.min_val), str(fv)))
+        else:
+            if fv < field.min_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(fv)))
+    if field.has_max:
+        if field.is_exclusive_max:
+            if fv >= field.max_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val), "< " + str(field.max_val), str(fv)))
+        else:
+            if fv > field.max_val:
+                err_list.append(FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(fv)))
+
+def _apply_field_default(field: Field, data: ValidatedData) -> None:
+    if field.kind == "string":
+        data.set_str(field.name, field.default_str)
+    elif field.kind == "int":
+        data.set_int(field.name, field.default_int)
+    elif field.kind == "float":
+        data.set_float(field.name, field.default_float)
+    elif field.kind == "bool":
+        data.set_bool(field.name, field.default_bool)
+    elif field.kind == "decimal":
+        data.set_decimal(field.name, field.default_decimal)
+    elif field.kind == "bigint":
+        data.set_bigint(field.name, field.default_bigint)
 
 def _object_lookup(v: JsonValue, key: str) -> JsonValue | None:
     i: int = 0
@@ -311,6 +438,36 @@ def _try_coerce_bool(s: str) -> bool | None:
     if s == "false" or s == "False" or s == "0":
         return False
     return None
+
+def validate_string_value(field: Field, full_path: str, raw_sv: str, err_list: list[FieldError]) -> str:
+    return _validate_string_value(field, full_path, raw_sv, err_list)
+
+def validate_int_value(field: Field, full_path: str, iv: int, err_list: list[FieldError]) -> None:
+    _validate_int_value(field, full_path, iv, err_list)
+
+def validate_float_value(field: Field, full_path: str, fv: float, err_list: list[FieldError]) -> None:
+    _validate_float_value(field, full_path, fv, err_list)
+
+def validate_decimal_value(field: Field, full_path: str, dv: Decimal, err_list: list[FieldError]) -> None:
+    _validate_decimal_value(field, full_path, dv, err_list)
+
+def validate_bigint_value(field: Field, full_path: str, bv: BigInt, err_list: list[FieldError]) -> None:
+    _validate_bigint_value(field, full_path, bv, err_list)
+
+def parse_decimal_str(raw: str) -> Decimal | None:
+    return _parse_decimal_str(raw)
+
+def parse_bigint_str(raw: str) -> BigInt | None:
+    return _parse_bigint_str(raw)
+
+def try_coerce_int(s: str) -> int | None:
+    return _try_coerce_int(s)
+
+def try_coerce_float(s: str) -> float | None:
+    return _try_coerce_float(s)
+
+def try_coerce_bool(s: str) -> bool | None:
+    return _try_coerce_bool(s)
 
 class Field:
     name: str
@@ -605,6 +762,22 @@ class Field:
         self.fmt = "timezone"
         return self
 
+    def ip(self: Field) -> Field:
+        self.fmt = "ip"
+        return self
+
+    def ipv4(self: Field) -> Field:
+        self.fmt = "ipv4"
+        return self
+
+    def ipv6(self: Field) -> Field:
+        self.fmt = "ipv6"
+        return self
+
+    def ip_global(self: Field) -> Field:
+        self.fmt = "ip-global"
+        return self
+
     def strip(self: Field) -> Field:
         self.do_strip = True
         return self
@@ -817,6 +990,22 @@ def _validate_string_value(field: Field, full_path: str, raw_sv: str, err_list: 
         err_list.append(
             FieldError(full_path, CODE_INVALID_TIMEZONE, "Field '" + full_path + "' is not a valid IANA timezone", "timezone", actual_repr)
         )
+    if field.fmt == "ip" and not validators.is_valid_ip(sv):
+        err_list.append(
+            FieldError(full_path, CODE_INVALID_IP, "Field '" + full_path + "' is not a valid IPv4/IPv6 address", "ip", actual_repr)
+        )
+    if field.fmt == "ipv4" and not validators.is_valid_ipv4(sv):
+        err_list.append(
+            FieldError(full_path, CODE_INVALID_IP, "Field '" + full_path + "' is not a valid IPv4 address", "ipv4", actual_repr)
+        )
+    if field.fmt == "ipv6" and not validators.is_valid_ipv6(sv):
+        err_list.append(
+            FieldError(full_path, CODE_INVALID_IP, "Field '" + full_path + "' is not a valid IPv6 address", "ipv6", actual_repr)
+        )
+    if field.fmt == "ip-global" and not validators.is_valid_global_ip(sv):
+        err_list.append(
+            FieldError(full_path, CODE_INVALID_IP, "Field '" + full_path + "' must be a globally routable IP address", "global ip", actual_repr)
+        )
     return sv
 
 def _is_in_derivation_stack(stack: list[str], name: str) -> bool:
@@ -868,7 +1057,7 @@ class Schema:
     coercion: int
     max_depth: int
     max_errors: int
-    custom_validators: list[(ValidatedData) -> list[FieldError]]
+    custom_validators: list[ValidatorFn]
 
     def __init__(self: Schema, name: str) -> None:
         self.name = name
@@ -891,7 +1080,7 @@ class Schema:
     def set_max_errors(self: Schema, limit: int) -> None:
         self.max_errors = limit
 
-    def add_validator(self: Schema, v: (ValidatedData) -> list[FieldError]) -> None:
+    def add_validator(self: Schema, v: ValidatorFn) -> None:
         self.custom_validators.append(v)
 
     def _add_field(self: Schema, f: Field) -> Field:
@@ -1137,24 +1326,33 @@ class Schema:
                     elif dname == "field_format" and ac >= 2:
                         ff_target: Field = self.require_field(nox.reflect.decorator_arg(di, 0))
                         fmt_s: str = nox.reflect.decorator_arg(di, 1)
-                        if fmt_s == "email":
-                            ff_target.email()
-                        elif fmt_s == "url":
-                            ff_target.url()
-                        elif fmt_s == "uuid":
-                            ff_target.uuid()
-                        elif fmt_s == "uuid7":
-                            ff_target.uuid7()
-                        elif fmt_s == "date":
-                            ff_target.date()
-                        elif fmt_s == "time":
-                            ff_target.time()
-                        elif fmt_s == "datetime" or fmt_s == "date-time":
-                            ff_target.datetime()
-                        elif fmt_s == "timezone":
-                            ff_target.timezone()
-                        else:
-                            raise ValueError("Invalid @field_format('" + fmt_s + "') on class '" + class_name + "'")
+                        match fmt_s:
+                            case "email":
+                                ff_target.email()
+                            case "url":
+                                ff_target.url()
+                            case "uuid":
+                                ff_target.uuid()
+                            case "uuid7":
+                                ff_target.uuid7()
+                            case "date":
+                                ff_target.date()
+                            case "time":
+                                ff_target.time()
+                            case "datetime" | "date-time":
+                                ff_target.datetime()
+                            case "timezone":
+                                ff_target.timezone()
+                            case "ip":
+                                ff_target.ip()
+                            case "ipv4":
+                                ff_target.ipv4()
+                            case "ipv6":
+                                ff_target.ipv6()
+                            case "ip-global" | "ip_global":
+                                ff_target.ip_global()
+                            case _:
+                                raise ValueError("Invalid @field_format('" + fmt_s + "') on class '" + class_name + "'")
                     elif dname == "field_bounds" and ac >= 3:
                         bf: Field = self.require_field(nox.reflect.decorator_arg(di, 0))
                         if nox.reflect.decorator_arg_kind(di, 1) == 1:
@@ -1277,10 +1475,13 @@ class Schema:
                             dfld.default_b(nox.reflect.decorator_arg_bool(di, 1))
             di = di + 1
 
-    def validate_at(self: Schema, v: JsonValue, prefix: str, depth: int) -> ValidationResult:
-        return self._validate_at_ext(v, prefix, depth, "")
+    def validate(self: Schema, v: JsonValue) -> ValidationResult:
+        if v.tpos > 0:
+            return self._validate_pos_ext(v, nox.json.pos_root(v), "", 0, "")
+        return self.validate_at(v, "", 0)
 
-    def _validate_at_ext(self: Schema, v: JsonValue, prefix: str, depth: int, extra_allowed_key: str) -> ValidationResult:
+    # Zero-allocation JSON tape validation path using nox.json.pos_* (Nox 2.2.4+)
+    def _validate_pos_ext(self: Schema, doc_v: JsonValue, obj_pos: int, prefix: str, depth: int, extra_allowed_key: str) -> ValidationResult:
         data: ValidatedData = ValidatedData()
         err_list: list[FieldError] = []
 
@@ -1290,21 +1491,21 @@ class Schema:
             )
             return ValidationResult(False, data, err_list)
 
-        if not nox.json.is_object(v):
+        obj_kind: int = nox.json.pos_kind(doc_v, obj_pos)
+        if obj_kind != 5:
             p: str = prefix
             if p == "":
                 p = "root"
             err_list.append(
-                FieldError(p, CODE_EXPECTED_OBJECT, "Expected a JSON object at " + p, "object", _describe_json_kind(v))
+                FieldError(p, CODE_EXPECTED_OBJECT, "Expected a JSON object at " + p, "object", _describe_pos_kind(obj_kind))
             )
             return ValidationResult(False, data, err_list)
 
-        # Single-pass object key scan: enforces unknown-field policy and indexes matched fields
-        found_fields: dict[str, JsonValue] = {}
-        n_keys: int = nox.json.object_len(v)
+        found_pos: dict[str, int] = {}
+        n_keys: int = nox.json.pos_len(doc_v, obj_pos)
         ki: int = 0
         while ki < n_keys:
-            k: str = nox.json.object_key(v, ki)
+            k: str = nox.json.pos_key(doc_v, obj_pos, ki)
             matched: Field | None = self.get_field(k)
             if matched is None:
                 if len(extra_allowed_key) == 0 or k != extra_allowed_key:
@@ -1319,17 +1520,16 @@ class Schema:
                             err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED, "Error limit reached", str(self.max_errors), str(len(err_list))))
                             return ValidationResult(False, data, err_list)
                     elif self.policy == POLICY_ALLOW:
-                        extra_val: JsonValue = nox.json.object_value(v, ki)
-                        data.set_extra(k, nox.json.dump(extra_val))
+                        extra_pos: int = nox.json.pos_at(doc_v, obj_pos, ki)
+                        data.set_extra(k, nox.json.pos_dump(doc_v, extra_pos))
             else:
                 eff: str = matched.name
                 if len(matched.json_name) > 0:
                     eff = matched.json_name
-                if k == eff and matched.name not in found_fields:
-                    found_fields[matched.name] = nox.json.object_value(v, ki)
+                if k == eff and matched.name not in found_pos:
+                    found_pos[matched.name] = nox.json.pos_at(doc_v, obj_pos, ki)
             ki = ki + 1
 
-        # Field validations in schema order
         fi: int = 0
         while fi < len(self.fields):
             field: Field = self.fields[fi]
@@ -1337,28 +1537,17 @@ class Schema:
             if prefix != "":
                 full_path = prefix + "." + field.name
 
-            if field.name not in found_fields:
-                # Missing from JSON
+            if field.name not in found_pos:
                 if field.has_default:
-                    if field.kind == "string":
-                        data.set_str(field.name, field.default_str)
-                    elif field.kind == "int":
-                        data.set_int(field.name, field.default_int)
-                    elif field.kind == "float":
-                        data.set_float(field.name, field.default_float)
-                    elif field.kind == "bool":
-                        data.set_bool(field.name, field.default_bool)
-                    elif field.kind == "decimal":
-                        data.set_decimal(field.name, field.default_decimal)
-                    elif field.kind == "bigint":
-                        data.set_bigint(field.name, field.default_bigint)
+                    _apply_field_default(field, data)
                 elif field.mode == MODE_REQUIRED or field.mode == MODE_REQUIRED_NULLABLE:
                     err_list.append(
                         FieldError(full_path, CODE_MISSING_FIELD, "Missing required field: '" + full_path + "'", field.kind, "missing")
                     )
             else:
-                field_val: JsonValue = found_fields[field.name]
-                if nox.json.is_null(field_val):
+                fp: int = found_pos[field.name]
+                fk: int = nox.json.pos_kind(doc_v, fp)
+                if fk == 0:
                     if field.mode == MODE_REQUIRED_NULLABLE or field.mode == MODE_OPTIONAL_NULLABLE:
                         data.set_null(field.name)
                     else:
@@ -1366,181 +1555,99 @@ class Schema:
                             FieldError(full_path, CODE_UNEXPECTED_NULL, "Field '" + full_path + "' cannot be null", "non-null " + field.kind, "null")
                         )
                 else:
-                    # Present and not null
                     if field.kind == "string":
                         sv_opt: str | None = None
-                        if nox.json.is_string(field_val):
-                            sv_opt = nox.json.as_string(field_val)
+                        if fk == 3:
+                            sv_opt = nox.json.pos_str(doc_v, fp)
                         elif self.coercion == COERCION_LAX:
-                            if nox.json.is_number(field_val):
-                                sv_opt = str(nox.json.as_number(field_val))
-                            elif nox.json.is_bool(field_val):
-                                if nox.json.as_bool(field_val):
+                            if fk == 2:
+                                sv_opt = str(nox.json.pos_number(doc_v, fp))
+                            elif fk == 1:
+                                if nox.json.pos_bool(doc_v, fp):
                                     sv_opt = "true"
                                 else:
                                     sv_opt = "false"
-
                         if sv_opt is None:
                             err_list.append(
-                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected string", "string", _describe_json_kind(field_val))
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected string", "string", _describe_pos_kind(fk))
                             )
                         else:
                             sv: str = _validate_string_value(field, full_path, sv_opt, err_list)
                             data.set_str(field.name, sv)
 
                     elif field.kind == "int":
-                        iv_opt: int | None = _parse_json_int(field_val, field.is_safe_int53, self.coercion == COERCION_LAX)
-
+                        iv_opt: int | None = _parse_pos_int(doc_v, fp, fk, field.is_safe_int53, self.coercion == COERCION_LAX)
                         if iv_opt is None:
                             err_list.append(
-                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected integer", "int", _describe_json_kind(field_val))
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected integer", "int", _describe_pos_kind(fk))
                             )
                         else:
                             iv: int = iv_opt
-                            if field.has_min_int:
-                                if field.is_exclusive_min:
-                                    if iv <= field.min_val_int:
-                                        err_list.append(
-                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val_int), "> " + str(field.min_val_int), str(iv))
-                                        )
-                                else:
-                                    if iv < field.min_val_int:
-                                        err_list.append(
-                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val_int), ">= " + str(field.min_val_int), str(iv))
-                                        )
-                            elif field.has_min:
-                                if field.is_exclusive_min:
-                                    if float(iv) <= field.min_val:
-                                        err_list.append(
-                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val), "> " + str(field.min_val), str(iv))
-                                        )
-                                else:
-                                    if float(iv) < field.min_val:
-                                        err_list.append(
-                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(iv))
-                                        )
-                            if field.has_max_int:
-                                if field.is_exclusive_max:
-                                    if iv >= field.max_val_int:
-                                        err_list.append(
-                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val_int), "< " + str(field.max_val_int), str(iv))
-                                        )
-                                else:
-                                    if iv > field.max_val_int:
-                                        err_list.append(
-                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val_int), "<= " + str(field.max_val_int), str(iv))
-                                        )
-                            elif field.has_max:
-                                if field.is_exclusive_max:
-                                    if float(iv) >= field.max_val:
-                                        err_list.append(
-                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val), "< " + str(field.max_val), str(iv))
-                                        )
-                                else:
-                                    if float(iv) > field.max_val:
-                                        err_list.append(
-                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(iv))
-                                        )
-                            if len(field.choices_int) > 0:
-                                matched_i: bool = False
-                                cii: int = 0
-                                while cii < len(field.choices_int):
-                                    if field.choices_int[cii] == iv:
-                                        matched_i = True
-                                    cii = cii + 1
-                                if not matched_i:
-                                    err_list.append(
-                                        FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed integer choices", "int choice", str(iv))
-                                    )
+                            _validate_int_value(field, full_path, iv, err_list)
                             data.set_int(field.name, iv)
 
                     elif field.kind == "float":
                         fv_opt: float | None = None
-                        if nox.json.is_number(field_val):
-                            raw_f: float = nox.json.as_number(field_val)
+                        if fk == 2:
+                            raw_f: float = nox.json.pos_number(doc_v, fp)
                             s_num: str = str(raw_f)
                             if s_num != "nan" and s_num != "inf" and s_num != "-inf":
                                 fv_opt = raw_f
-                        elif self.coercion == COERCION_LAX and nox.json.is_string(field_val):
-                            fv_opt = _try_coerce_float(nox.json.as_string(field_val))
-
+                        elif self.coercion == COERCION_LAX and fk == 3:
+                            fv_opt = _try_coerce_float(nox.json.pos_str(doc_v, fp))
                         if fv_opt is None:
                             err_list.append(
-                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected float", "float", _describe_json_kind(field_val))
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected float", "float", _describe_pos_kind(fk))
                             )
                         else:
                             fv: float = fv_opt
-                            if field.has_min:
-                                if field.is_exclusive_min:
-                                    if fv <= field.min_val:
-                                        err_list.append(
-                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val), "> " + str(field.min_val), str(fv))
-                                        )
-                                else:
-                                    if fv < field.min_val:
-                                        err_list.append(
-                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(fv))
-                                        )
-                            if field.has_max:
-                                if field.is_exclusive_max:
-                                    if fv >= field.max_val:
-                                        err_list.append(
-                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val), "< " + str(field.max_val), str(fv))
-                                        )
-                                else:
-                                    if fv > field.max_val:
-                                        err_list.append(
-                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(fv))
-                                        )
+                            _validate_float_value(field, full_path, fv, err_list)
                             data.set_float(field.name, fv)
 
                     elif field.kind == "bool":
                         bv_opt: bool | None = None
-                        if nox.json.is_bool(field_val):
-                            bv_opt = nox.json.as_bool(field_val)
-                        elif self.coercion == COERCION_LAX and nox.json.is_string(field_val):
-                            bv_opt = _try_coerce_bool(nox.json.as_string(field_val))
-
+                        if fk == 1:
+                            bv_opt = nox.json.pos_bool(doc_v, fp)
+                        elif self.coercion == COERCION_LAX and fk == 3:
+                            bv_opt = _try_coerce_bool(nox.json.pos_str(doc_v, fp))
                         if bv_opt is None:
                             err_list.append(
-                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected boolean", "bool", _describe_json_kind(field_val))
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected boolean", "bool", _describe_pos_kind(fk))
                             )
                         else:
                             data.set_bool(field.name, bv_opt)
 
                     elif field.kind == "decimal":
-                        dv_opt: Decimal | None = _parse_json_decimal(field_val)
+                        dv_opt: Decimal | None = _parse_pos_decimal(doc_v, fp, fk)
                         if dv_opt is None:
                             err_list.append(
-                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected decimal string or number", "decimal", _describe_json_kind(field_val))
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected decimal string or number", "decimal", _describe_pos_kind(fk))
                             )
                         else:
-                            dv: Decimal = dv_opt
-                            _validate_decimal_value(field, full_path, dv, err_list)
-                            data.set_decimal(field.name, dv)
+                            _validate_decimal_value(field, full_path, dv_opt, err_list)
+                            data.set_decimal(field.name, dv_opt)
 
                     elif field.kind == "bigint":
-                        bgv_opt: BigInt | None = _parse_json_bigint(field_val)
+                        bgv_opt: BigInt | None = _parse_pos_bigint(doc_v, fp, fk)
                         if bgv_opt is None:
                             err_list.append(
-                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected bigint string or integer", "bigint", _describe_json_kind(field_val))
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected bigint string or integer", "bigint", _describe_pos_kind(fk))
                             )
                         else:
-                            bgv: BigInt = bgv_opt
-                            _validate_bigint_value(field, full_path, bgv, err_list)
-                            data.set_bigint(field.name, bgv)
+                            _validate_bigint_value(field, full_path, bgv_opt, err_list)
+                            data.set_bigint(field.name, bgv_opt)
 
                     elif field.kind == "object":
-                        if not nox.json.is_object(field_val):
+                        if fk != 5:
                             err_list.append(
-                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected object", "object", _describe_json_kind(field_val))
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected object", "object", _describe_pos_kind(fk))
                             )
                         else:
                             sub: Schema | None = field.nested_schema
                             if sub is not None:
                                 if sub.max_depth > self.max_depth:
                                     sub.max_depth = self.max_depth
-                                sub_res: ValidationResult = sub.validate_at(field_val, full_path, depth + 1)
+                                sub_res: ValidationResult = sub._validate_pos_ext(doc_v, fp, full_path, depth + 1, "")
                                 if not sub_res.is_valid:
                                     si: int = 0
                                     while si < len(sub_res.errors):
@@ -1554,7 +1661,7 @@ class Schema:
                         if u_sub is not None:
                             if u_sub.max_depth > self.max_depth:
                                 u_sub.max_depth = self.max_depth
-                            u_res: ValidationResult = u_sub.validate_at(field_val, full_path, depth + 1)
+                            u_res: ValidationResult = u_sub.validate_pos_at(doc_v, fp, full_path, depth + 1)
                             if not u_res.is_valid:
                                 ui: int = 0
                                 while ui < len(u_res.errors):
@@ -1564,12 +1671,12 @@ class Schema:
                                 data.set_object(field.name, u_res.data)
 
                     elif field.kind == "list":
-                        if not nox.json.is_array(field_val):
+                        if fk != 4:
                             err_list.append(
-                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected array", "list", _describe_json_kind(field_val))
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected array", "list", _describe_pos_kind(fk))
                             )
                         else:
-                            alen: int = nox.json.array_len(field_val)
+                            alen: int = nox.json.pos_len(doc_v, fp)
                             if field.has_min_items and alen < field.min_items:
                                 err_list.append(
                                     FieldError(full_path, CODE_ARRAY_TOO_SHORT, "Array '" + full_path + "' must contain at least " + str(field.min_items) + " items", "length >= " + str(field.min_items), str(alen))
@@ -1583,14 +1690,13 @@ class Schema:
                                 s_items: list[str] = []
                                 ai: int = 0
                                 while ai < alen:
-                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    ep: int = nox.json.pos_at(doc_v, fp, ai)
+                                    ek: int = nox.json.pos_kind(doc_v, ep)
                                     el_path: str = full_path + "[" + str(ai) + "]"
-                                    if not nox.json.is_string(el):
-                                        err_list.append(
-                                            FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected string", "string", _describe_json_kind(el))
-                                        )
+                                    if ek != 3:
+                                        err_list.append(FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected string", "string", _describe_pos_kind(ek)))
                                     else:
-                                        s_items.append(nox.json.as_string(el))
+                                        s_items.append(nox.json.pos_str(doc_v, ep))
                                     ai = ai + 1
                                 data.set_list_str(field.name, s_items)
 
@@ -1598,13 +1704,12 @@ class Schema:
                                 i_items: list[int] = []
                                 ai: int = 0
                                 while ai < alen:
-                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    ep: int = nox.json.pos_at(doc_v, fp, ai)
+                                    ek: int = nox.json.pos_kind(doc_v, ep)
                                     el_path: str = full_path + "[" + str(ai) + "]"
-                                    el_int: int | None = _parse_json_int(el, field.is_safe_int53, False)
+                                    el_int: int | None = _parse_pos_int(doc_v, ep, ek, field.is_safe_int53, False)
                                     if el_int is None:
-                                        err_list.append(
-                                            FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected integer", "int", _describe_json_kind(el))
-                                        )
+                                        err_list.append(FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected integer", "int", _describe_pos_kind(ek)))
                                     else:
                                         i_items.append(el_int)
                                     ai = ai + 1
@@ -1614,14 +1719,13 @@ class Schema:
                                 f_items: list[float] = []
                                 ai: int = 0
                                 while ai < alen:
-                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    ep: int = nox.json.pos_at(doc_v, fp, ai)
+                                    ek: int = nox.json.pos_kind(doc_v, ep)
                                     el_path: str = full_path + "[" + str(ai) + "]"
-                                    if not nox.json.is_number(el):
-                                        err_list.append(
-                                            FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected float", "float", _describe_json_kind(el))
-                                        )
+                                    if ek != 2:
+                                        err_list.append(FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected float", "float", _describe_pos_kind(ek)))
                                     else:
-                                        f_items.append(nox.json.as_number(el))
+                                        f_items.append(nox.json.pos_number(doc_v, ep))
                                     ai = ai + 1
                                 data.set_list_float(field.name, f_items)
 
@@ -1629,14 +1733,13 @@ class Schema:
                                 b_items: list[bool] = []
                                 ai: int = 0
                                 while ai < alen:
-                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    ep: int = nox.json.pos_at(doc_v, fp, ai)
+                                    ek: int = nox.json.pos_kind(doc_v, ep)
                                     el_path: str = full_path + "[" + str(ai) + "]"
-                                    if not nox.json.is_bool(el):
-                                        err_list.append(
-                                            FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected boolean", "bool", _describe_json_kind(el))
-                                        )
+                                    if ek != 1:
+                                        err_list.append(FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected boolean", "bool", _describe_pos_kind(ek)))
                                     else:
-                                        b_items.append(nox.json.as_bool(el))
+                                        b_items.append(nox.json.pos_bool(doc_v, ep))
                                     ai = ai + 1
                                 data.set_list_bool(field.name, b_items)
 
@@ -1645,17 +1748,16 @@ class Schema:
                                 item_sub: Schema | None = field.item_schema
                                 ai: int = 0
                                 while ai < alen:
-                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    ep: int = nox.json.pos_at(doc_v, fp, ai)
+                                    ek: int = nox.json.pos_kind(doc_v, ep)
                                     el_path: str = full_path + "[" + str(ai) + "]"
-                                    if not nox.json.is_object(el):
-                                        err_list.append(
-                                            FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected object", "object", _describe_json_kind(el))
-                                        )
+                                    if ek != 5:
+                                        err_list.append(FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected object", "object", _describe_pos_kind(ek)))
                                     else:
                                         if item_sub is not None:
                                             if item_sub.max_depth > self.max_depth:
                                                 item_sub.max_depth = self.max_depth
-                                            el_res: ValidationResult = item_sub.validate_at(el, el_path, depth + 1)
+                                            el_res: ValidationResult = item_sub._validate_pos_ext(doc_v, ep, el_path, depth + 1, "")
                                             if not el_res.is_valid:
                                                 ei: int = 0
                                                 while ei < len(el_res.errors):
@@ -1671,12 +1773,12 @@ class Schema:
                                 item_u: UnionSchema | None = field.item_union
                                 ai: int = 0
                                 while ai < alen:
-                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    ep: int = nox.json.pos_at(doc_v, fp, ai)
                                     el_path: str = full_path + "[" + str(ai) + "]"
                                     if item_u is not None:
                                         if item_u.max_depth > self.max_depth:
                                             item_u.max_depth = self.max_depth
-                                        eu_res: ValidationResult = item_u.validate_at(el, el_path, depth + 1)
+                                        eu_res: ValidationResult = item_u.validate_pos_at(doc_v, ep, el_path, depth + 1)
                                         if not eu_res.is_valid:
                                             eui: int = 0
                                             while eui < len(eu_res.errors):
@@ -1693,7 +1795,6 @@ class Schema:
 
             fi = fi + 1
 
-        # Run custom validators only if field-level checks had no errors
         if len(err_list) == 0:
             cvi: int = 0
             while cvi < len(self.custom_validators):
@@ -1706,9 +1807,6 @@ class Schema:
                 cvi = cvi + 1
 
         return ValidationResult(len(err_list) == 0, data, err_list)
-
-    def validate(self: Schema, v: JsonValue) -> ValidationResult:
-        return self.validate_at(v, "", 0)
 
     def validate_row(self: Schema, row: Row) -> ValidationResult:
         data: ValidatedData = ValidatedData()
@@ -2310,6 +2408,436 @@ class Schema:
                 while eei < len(extra_errs):
                     err_list.append(extra_errs[eei])
                     eei = eei + 1
+                cvi = cvi + 1
+
+        return ValidationResult(len(err_list) == 0, data, err_list)
+
+    def validate_at(self: Schema, v: JsonValue, prefix: str, depth: int) -> ValidationResult:
+        return self._validate_at_ext(v, prefix, depth, "")
+
+    def _validate_at_ext(self: Schema, v: JsonValue, prefix: str, depth: int, extra_allowed_key: str) -> ValidationResult:
+        data: ValidatedData = ValidatedData()
+        err_list: list[FieldError] = []
+
+        if depth > self.max_depth:
+            err_list.append(
+                FieldError(prefix, CODE_RECURSION_LIMIT, "Maximum nesting depth (" + str(self.max_depth) + ") exceeded", "depth <= " + str(self.max_depth), str(depth))
+            )
+            return ValidationResult(False, data, err_list)
+
+        if not nox.json.is_object(v):
+            p: str = prefix
+            if p == "":
+                p = "root"
+            err_list.append(
+                FieldError(p, CODE_EXPECTED_OBJECT, "Expected a JSON object at " + p, "object", _describe_json_kind(v))
+            )
+            return ValidationResult(False, data, err_list)
+
+        # Single-pass object key scan: enforces unknown-field policy and indexes matched fields
+        found_fields: dict[str, JsonValue] = {}
+        n_keys: int = nox.json.object_len(v)
+        ki: int = 0
+        while ki < n_keys:
+            k: str = nox.json.object_key(v, ki)
+            matched: Field | None = self.get_field(k)
+            if matched is None:
+                if len(extra_allowed_key) == 0 or k != extra_allowed_key:
+                    if self.policy == POLICY_FORBID:
+                        p_extra: str = k
+                        if prefix != "":
+                            p_extra = prefix + "." + k
+                        err_list.append(
+                            FieldError(p_extra, CODE_EXTRA_FIELD, "Unexpected unknown field: '" + p_extra + "'", "none", "present")
+                        )
+                        if len(err_list) >= self.max_errors:
+                            err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED, "Error limit reached", str(self.max_errors), str(len(err_list))))
+                            return ValidationResult(False, data, err_list)
+                    elif self.policy == POLICY_ALLOW:
+                        extra_val: JsonValue = nox.json.object_value(v, ki)
+                        data.set_extra(k, nox.json.dump(extra_val))
+            else:
+                eff: str = matched.name
+                if len(matched.json_name) > 0:
+                    eff = matched.json_name
+                if k == eff and matched.name not in found_fields:
+                    found_fields[matched.name] = nox.json.object_value(v, ki)
+            ki = ki + 1
+
+        # Field validations in schema order
+        fi: int = 0
+        while fi < len(self.fields):
+            field: Field = self.fields[fi]
+            full_path: str = field.name
+            if prefix != "":
+                full_path = prefix + "." + field.name
+
+            if field.name not in found_fields:
+                # Missing from JSON
+                if field.has_default:
+                    if field.kind == "string":
+                        data.set_str(field.name, field.default_str)
+                    elif field.kind == "int":
+                        data.set_int(field.name, field.default_int)
+                    elif field.kind == "float":
+                        data.set_float(field.name, field.default_float)
+                    elif field.kind == "bool":
+                        data.set_bool(field.name, field.default_bool)
+                    elif field.kind == "decimal":
+                        data.set_decimal(field.name, field.default_decimal)
+                    elif field.kind == "bigint":
+                        data.set_bigint(field.name, field.default_bigint)
+                elif field.mode == MODE_REQUIRED or field.mode == MODE_REQUIRED_NULLABLE:
+                    err_list.append(
+                        FieldError(full_path, CODE_MISSING_FIELD, "Missing required field: '" + full_path + "'", field.kind, "missing")
+                    )
+            else:
+                field_val: JsonValue = found_fields[field.name]
+                if nox.json.is_null(field_val):
+                    if field.mode == MODE_REQUIRED_NULLABLE or field.mode == MODE_OPTIONAL_NULLABLE:
+                        data.set_null(field.name)
+                    else:
+                        err_list.append(
+                            FieldError(full_path, CODE_UNEXPECTED_NULL, "Field '" + full_path + "' cannot be null", "non-null " + field.kind, "null")
+                        )
+                else:
+                    # Present and not null
+                    if field.kind == "string":
+                        sv_opt: str | None = None
+                        if nox.json.is_string(field_val):
+                            sv_opt = nox.json.as_string(field_val)
+                        elif self.coercion == COERCION_LAX:
+                            if nox.json.is_number(field_val):
+                                sv_opt = str(nox.json.as_number(field_val))
+                            elif nox.json.is_bool(field_val):
+                                if nox.json.as_bool(field_val):
+                                    sv_opt = "true"
+                                else:
+                                    sv_opt = "false"
+
+                        if sv_opt is None:
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected string", "string", _describe_json_kind(field_val))
+                            )
+                        else:
+                            sv: str = _validate_string_value(field, full_path, sv_opt, err_list)
+                            data.set_str(field.name, sv)
+
+                    elif field.kind == "int":
+                        iv_opt: int | None = _parse_json_int(field_val, field.is_safe_int53, self.coercion == COERCION_LAX)
+
+                        if iv_opt is None:
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected integer", "int", _describe_json_kind(field_val))
+                            )
+                        else:
+                            iv: int = iv_opt
+                            if field.has_min_int:
+                                if field.is_exclusive_min:
+                                    if iv <= field.min_val_int:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val_int), "> " + str(field.min_val_int), str(iv))
+                                        )
+                                else:
+                                    if iv < field.min_val_int:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val_int), ">= " + str(field.min_val_int), str(iv))
+                                        )
+                            elif field.has_min:
+                                if field.is_exclusive_min:
+                                    if float(iv) <= field.min_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val), "> " + str(field.min_val), str(iv))
+                                        )
+                                else:
+                                    if float(iv) < field.min_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(iv))
+                                        )
+                            if field.has_max_int:
+                                if field.is_exclusive_max:
+                                    if iv >= field.max_val_int:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val_int), "< " + str(field.max_val_int), str(iv))
+                                        )
+                                else:
+                                    if iv > field.max_val_int:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val_int), "<= " + str(field.max_val_int), str(iv))
+                                        )
+                            elif field.has_max:
+                                if field.is_exclusive_max:
+                                    if float(iv) >= field.max_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val), "< " + str(field.max_val), str(iv))
+                                        )
+                                else:
+                                    if float(iv) > field.max_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(iv))
+                                        )
+                            if len(field.choices_int) > 0:
+                                matched_i: bool = False
+                                cii: int = 0
+                                while cii < len(field.choices_int):
+                                    if field.choices_int[cii] == iv:
+                                        matched_i = True
+                                    cii = cii + 1
+                                if not matched_i:
+                                    err_list.append(
+                                        FieldError(full_path, CODE_CHOICE_MISMATCH, "Field '" + full_path + "' must be one of the allowed integer choices", "int choice", str(iv))
+                                    )
+                            data.set_int(field.name, iv)
+
+                    elif field.kind == "float":
+                        fv_opt: float | None = None
+                        if nox.json.is_number(field_val):
+                            raw_f: float = nox.json.as_number(field_val)
+                            s_num: str = str(raw_f)
+                            if s_num != "nan" and s_num != "inf" and s_num != "-inf":
+                                fv_opt = raw_f
+                        elif self.coercion == COERCION_LAX and nox.json.is_string(field_val):
+                            fv_opt = _try_coerce_float(nox.json.as_string(field_val))
+
+                        if fv_opt is None:
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected float", "float", _describe_json_kind(field_val))
+                            )
+                        else:
+                            fv: float = fv_opt
+                            if field.has_min:
+                                if field.is_exclusive_min:
+                                    if fv <= field.min_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly greater than " + str(field.min_val), "> " + str(field.min_val), str(fv))
+                                        )
+                                else:
+                                    if fv < field.min_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at least " + str(field.min_val), ">= " + str(field.min_val), str(fv))
+                                        )
+                            if field.has_max:
+                                if field.is_exclusive_max:
+                                    if fv >= field.max_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be strictly less than " + str(field.max_val), "< " + str(field.max_val), str(fv))
+                                        )
+                                else:
+                                    if fv > field.max_val:
+                                        err_list.append(
+                                            FieldError(full_path, CODE_OUT_OF_RANGE, "Field '" + full_path + "' must be at most " + str(field.max_val), "<= " + str(field.max_val), str(fv))
+                                        )
+                            data.set_float(field.name, fv)
+
+                    elif field.kind == "bool":
+                        bv_opt: bool | None = None
+                        if nox.json.is_bool(field_val):
+                            bv_opt = nox.json.as_bool(field_val)
+                        elif self.coercion == COERCION_LAX and nox.json.is_string(field_val):
+                            bv_opt = _try_coerce_bool(nox.json.as_string(field_val))
+
+                        if bv_opt is None:
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected boolean", "bool", _describe_json_kind(field_val))
+                            )
+                        else:
+                            data.set_bool(field.name, bv_opt)
+
+                    elif field.kind == "decimal":
+                        dv_opt: Decimal | None = _parse_json_decimal(field_val)
+                        if dv_opt is None:
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected decimal string or number", "decimal", _describe_json_kind(field_val))
+                            )
+                        else:
+                            dv: Decimal = dv_opt
+                            _validate_decimal_value(field, full_path, dv, err_list)
+                            data.set_decimal(field.name, dv)
+
+                    elif field.kind == "bigint":
+                        bgv_opt: BigInt | None = _parse_json_bigint(field_val)
+                        if bgv_opt is None:
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected bigint string or integer", "bigint", _describe_json_kind(field_val))
+                            )
+                        else:
+                            bgv: BigInt = bgv_opt
+                            _validate_bigint_value(field, full_path, bgv, err_list)
+                            data.set_bigint(field.name, bgv)
+
+                    elif field.kind == "object":
+                        if not nox.json.is_object(field_val):
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected object", "object", _describe_json_kind(field_val))
+                            )
+                        else:
+                            sub: Schema | None = field.nested_schema
+                            if sub is not None:
+                                if sub.max_depth > self.max_depth:
+                                    sub.max_depth = self.max_depth
+                                sub_res: ValidationResult = sub.validate_at(field_val, full_path, depth + 1)
+                                if not sub_res.is_valid:
+                                    si: int = 0
+                                    while si < len(sub_res.errors):
+                                        err_list.append(sub_res.errors[si])
+                                        si = si + 1
+                                else:
+                                    data.set_object(field.name, sub_res.data)
+
+                    elif field.kind == "union":
+                        u_sub: UnionSchema | None = field.union_schema
+                        if u_sub is not None:
+                            if u_sub.max_depth > self.max_depth:
+                                u_sub.max_depth = self.max_depth
+                            u_res: ValidationResult = u_sub.validate_at(field_val, full_path, depth + 1)
+                            if not u_res.is_valid:
+                                ui: int = 0
+                                while ui < len(u_res.errors):
+                                    err_list.append(u_res.errors[ui])
+                                    ui = ui + 1
+                            else:
+                                data.set_object(field.name, u_res.data)
+
+                    elif field.kind == "list":
+                        if not nox.json.is_array(field_val):
+                            err_list.append(
+                                FieldError(full_path, CODE_TYPE_MISMATCH, "Field '" + full_path + "' expected array", "list", _describe_json_kind(field_val))
+                            )
+                        else:
+                            alen: int = nox.json.array_len(field_val)
+                            if field.has_min_items and alen < field.min_items:
+                                err_list.append(
+                                    FieldError(full_path, CODE_ARRAY_TOO_SHORT, "Array '" + full_path + "' must contain at least " + str(field.min_items) + " items", "length >= " + str(field.min_items), str(alen))
+                                )
+                            if field.has_max_items and alen > field.max_items:
+                                err_list.append(
+                                    FieldError(full_path, CODE_ARRAY_TOO_LONG, "Array '" + full_path + "' must contain at most " + str(field.max_items) + " items", "length <= " + str(field.max_items), str(alen))
+                                )
+
+                            if field.item_kind == "string":
+                                s_items: list[str] = []
+                                ai: int = 0
+                                while ai < alen:
+                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    el_path: str = full_path + "[" + str(ai) + "]"
+                                    if not nox.json.is_string(el):
+                                        err_list.append(
+                                            FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected string", "string", _describe_json_kind(el))
+                                        )
+                                    else:
+                                        s_items.append(nox.json.as_string(el))
+                                    ai = ai + 1
+                                data.set_list_str(field.name, s_items)
+
+                            elif field.item_kind == "int":
+                                i_items: list[int] = []
+                                ai: int = 0
+                                while ai < alen:
+                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    el_path: str = full_path + "[" + str(ai) + "]"
+                                    el_int: int | None = _parse_json_int(el, field.is_safe_int53, False)
+                                    if el_int is None:
+                                        err_list.append(
+                                            FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected integer", "int", _describe_json_kind(el))
+                                        )
+                                    else:
+                                        i_items.append(el_int)
+                                    ai = ai + 1
+                                data.set_list_int(field.name, i_items)
+
+                            elif field.item_kind == "float":
+                                f_items: list[float] = []
+                                ai: int = 0
+                                while ai < alen:
+                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    el_path: str = full_path + "[" + str(ai) + "]"
+                                    if not nox.json.is_number(el):
+                                        err_list.append(
+                                            FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected float", "float", _describe_json_kind(el))
+                                        )
+                                    else:
+                                        f_items.append(nox.json.as_number(el))
+                                    ai = ai + 1
+                                data.set_list_float(field.name, f_items)
+
+                            elif field.item_kind == "bool":
+                                b_items: list[bool] = []
+                                ai: int = 0
+                                while ai < alen:
+                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    el_path: str = full_path + "[" + str(ai) + "]"
+                                    if not nox.json.is_bool(el):
+                                        err_list.append(
+                                            FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected boolean", "bool", _describe_json_kind(el))
+                                        )
+                                    else:
+                                        b_items.append(nox.json.as_bool(el))
+                                    ai = ai + 1
+                                data.set_list_bool(field.name, b_items)
+
+                            elif field.item_kind == "object":
+                                o_items: list[ValidatedData] = []
+                                item_sub: Schema | None = field.item_schema
+                                ai: int = 0
+                                while ai < alen:
+                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    el_path: str = full_path + "[" + str(ai) + "]"
+                                    if not nox.json.is_object(el):
+                                        err_list.append(
+                                            FieldError(el_path, CODE_TYPE_MISMATCH, "Element '" + el_path + "' expected object", "object", _describe_json_kind(el))
+                                        )
+                                    else:
+                                        if item_sub is not None:
+                                            if item_sub.max_depth > self.max_depth:
+                                                item_sub.max_depth = self.max_depth
+                                            el_res: ValidationResult = item_sub.validate_at(el, el_path, depth + 1)
+                                            if not el_res.is_valid:
+                                                ei: int = 0
+                                                while ei < len(el_res.errors):
+                                                    err_list.append(el_res.errors[ei])
+                                                    ei = ei + 1
+                                            else:
+                                                o_items.append(el_res.data)
+                                    ai = ai + 1
+                                data.set_list_object(field.name, o_items)
+
+                            elif field.item_kind == "union":
+                                u_items: list[ValidatedData] = []
+                                item_u: UnionSchema | None = field.item_union
+                                ai: int = 0
+                                while ai < alen:
+                                    el: JsonValue = nox.json.array_get(field_val, ai)
+                                    el_path: str = full_path + "[" + str(ai) + "]"
+                                    if item_u is not None:
+                                        if item_u.max_depth > self.max_depth:
+                                            item_u.max_depth = self.max_depth
+                                        eu_res: ValidationResult = item_u.validate_at(el, el_path, depth + 1)
+                                        if not eu_res.is_valid:
+                                            eui: int = 0
+                                            while eui < len(eu_res.errors):
+                                                err_list.append(eu_res.errors[eui])
+                                                eui = eui + 1
+                                        else:
+                                            u_items.append(eu_res.data)
+                                    ai = ai + 1
+                                data.set_list_object(field.name, u_items)
+
+            if len(err_list) >= self.max_errors:
+                err_list.append(FieldError(prefix, CODE_MAX_ERRORS_EXCEEDED, "Error limit reached", str(self.max_errors), str(len(err_list))))
+                return ValidationResult(False, data, err_list)
+
+            fi = fi + 1
+
+        # Run custom validators only if field-level checks had no errors
+        if len(err_list) == 0:
+            cvi: int = 0
+            while cvi < len(self.custom_validators):
+                cv: (ValidatedData) -> list[FieldError] = self.custom_validators[cvi]
+                c_errs: list[FieldError] = cv(data)
+                ci: int = 0
+                while ci < len(c_errs):
+                    err_list.append(c_errs[ci])
+                    ci = ci + 1
                 cvi = cvi + 1
 
         return ValidationResult(len(err_list) == 0, data, err_list)
@@ -3005,7 +3533,62 @@ class UnionSchema:
         self.max_errors = limit
 
     def validate(self: UnionSchema, v: JsonValue) -> ValidationResult:
+        if v.tpos > 0:
+            return self.validate_pos_at(v, nox.json.pos_root(v), "", 0)
         return self.validate_at(v, "", 0)
+
+    def validate_pos_at(self: UnionSchema, doc_v: JsonValue, pos: int, prefix: str, depth: int) -> ValidationResult:
+        data: ValidatedData = ValidatedData()
+        err_list: list[FieldError] = []
+
+        if depth > self.max_depth:
+            err_list.append(
+                FieldError(prefix, CODE_RECURSION_LIMIT, "Maximum nesting depth (" + str(self.max_depth) + ") exceeded", "depth <= " + str(self.max_depth), str(depth))
+            )
+            return ValidationResult(False, data, err_list)
+
+        uk: int = nox.json.pos_kind(doc_v, pos)
+        if uk != 5:
+            p: str = prefix
+            if p == "":
+                p = "root"
+            err_list.append(
+                FieldError(p, CODE_EXPECTED_OBJECT, "Expected a JSON object for discriminated union at " + p, "object", _describe_pos_kind(uk))
+            )
+            return ValidationResult(False, data, err_list)
+
+        disc_path: str = self.discriminator
+        if prefix != "":
+            disc_path = prefix + "." + self.discriminator
+
+        disc_pos: int = nox.json.pos_find(doc_v, pos, self.discriminator)
+        if disc_pos < 0:
+            err_list.append(
+                FieldError(disc_path, CODE_MISSING_FIELD, "Missing discriminator field: '" + disc_path + "'", "string", "missing")
+            )
+            return ValidationResult(False, data, err_list)
+
+        dk: int = nox.json.pos_kind(doc_v, disc_pos)
+        if dk != 3:
+            err_list.append(
+                FieldError(disc_path, CODE_TYPE_MISMATCH, "Discriminator '" + disc_path + "' expected string", "string", _describe_pos_kind(dk))
+            )
+            return ValidationResult(False, data, err_list)
+
+        tag: str = nox.json.pos_str(doc_v, disc_pos)
+        if tag not in self.variants:
+            err_list.append(
+                FieldError(disc_path, CODE_CHOICE_MISMATCH, "Unknown union discriminator tag '" + tag + "' for '" + disc_path + "'", "one of registered union variants", tag)
+            )
+            return ValidationResult(False, data, err_list)
+
+        sub: Schema = self.variants[tag]
+        if sub.max_depth > self.max_depth:
+            sub.max_depth = self.max_depth
+        sub_res: ValidationResult = sub._validate_pos_ext(doc_v, pos, prefix, depth, self.discriminator)
+        if sub_res.is_valid and not sub_res.data.has(self.discriminator):
+            sub_res.data.set_str(self.discriminator, tag)
+        return sub_res
 
     def validate_at(self: UnionSchema, v: JsonValue, prefix: str, depth: int) -> ValidationResult:
         data: ValidatedData = ValidatedData()

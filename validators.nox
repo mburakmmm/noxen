@@ -5,8 +5,26 @@ import nox.regex
 import nox.strings
 import nox.uuid
 import nox.timezone
+import nox.ip
 from nox.url import URL, UrlError
 from nox.timezone import TimezoneError
+from nox.ip import IpAddress, IpError
+
+__all__: list[str] = [
+    "is_valid_email",
+    "is_valid_url",
+    "is_valid_date",
+    "is_valid_time",
+    "is_valid_datetime",
+    "is_valid_uuid",
+    "is_valid_uuid7",
+    "is_valid_timezone",
+    "is_valid_ip",
+    "is_valid_ipv4",
+    "is_valid_ipv6",
+    "is_valid_global_ip",
+    "is_valid_int"
+]
 
 def is_valid_email(s: str) -> bool:
     if nox.strings.contains(s, " "):
@@ -150,6 +168,26 @@ def is_valid_timezone(s: str) -> bool:
         return True
     except TimezoneError as e:
         return False
+
+def is_valid_ip(s: str) -> bool:
+    return nox.ip.is_valid(s)
+
+def is_valid_ipv4(s: str) -> bool:
+    try:
+        addr: IpAddress = nox.ip.parse(s)
+        return addr.version == 4
+    except IpError as e:
+        return False
+
+def is_valid_ipv6(s: str) -> bool:
+    try:
+        addr: IpAddress = nox.ip.parse(s)
+        return addr.version == 6
+    except IpError as e:
+        return False
+
+def is_valid_global_ip(s: str) -> bool:
+    return nox.ip.is_global_text(s)
 
 # Checks if a floating point value safely represents an integer without precision loss.
 def is_valid_int(n: float) -> bool:

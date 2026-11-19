@@ -7,6 +7,8 @@ import models
 from core import ValidatedData, ValidationResult, Result
 from models import ModelSchema
 
+__all__: list[str] = ["row_to_validated_data", "DbAdapter"]
+
 def row_to_validated_data(row: Row) -> ValidatedData:
     d: ValidatedData = ValidatedData()
     n: int = row.column_count()

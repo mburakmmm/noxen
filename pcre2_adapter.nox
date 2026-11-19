@@ -12,6 +12,15 @@ from nox.pcre2 import Pcre2, Match, Pcre2Error, IGNORECASE, MULTILINE, DOTALL, E
 from core import ValidatedData
 from errors import FieldError, CODE_PATTERN_MISMATCH
 
+__all__: list[str] = [
+    "pcre2_supported",
+    "pcre2_jit_supported",
+    "CompiledPcre2Pattern",
+    "compile_pcre2_pattern",
+    "compile_pcre2_validator",
+    "pcre2_full_match_ok"
+]
+
 def pcre2_supported() -> bool:
     return nox.pcre2.is_supported()
 

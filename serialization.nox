@@ -9,6 +9,8 @@ from nox.bigint import BigInt
 import core
 from core import ValidatedData
 
+__all__: list[str] = ["is_finite_float", "Serializer"]
+
 def is_finite_float(v: float) -> bool:
     # Pure mathematical IEEE 754 finite check without division-by-zero or string formatting:
     # 1. NaN != NaN (v == v is False for NaN)

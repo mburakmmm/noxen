@@ -9,6 +9,8 @@ from nox.json import JsonWriter
 from nox.decimal import Decimal
 from nox.bigint import BigInt
 
+__all__: list[str] = ["ValidatedData", "ValidationResult", "ValidationOutcome", "Result"]
+
 class ValidatedData:
     _strs: dict[str, str]
     _ints: dict[str, int]
