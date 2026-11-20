@@ -36,6 +36,24 @@ jobs:
           irm https://raw.githubusercontent.com/mburakmmm/nox-lang/v2.2.38/install.ps1 | iex
           echo "$env:USERPROFILE\.nox-lang\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Install Zig 0.16.0 (Linux / macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "macOS" ]; then ZARCH=aarch64-macos; else ZARCH=x86_64-linux; fi
+          curl -sSL --retry 4 -o /tmp/zig.tar.xz "https://ziglang.org/download/0.16.0/zig-${ZARCH}-0.16.0.tar.xz"
+          tar xf /tmp/zig.tar.xz -C /tmp
+          echo "/tmp/zig-${ZARCH}-0.16.0" >> "$GITHUB_PATH"
+
+      - name: Install Zig 0.16.0 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip" -OutFile "$env:RUNNER_TEMP\zig.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\zig.zip" -DestinationPath "$env:RUNNER_TEMP\zig"
+          "$env:RUNNER_TEMP\zig\zig-x86_64-windows-0.16.0" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

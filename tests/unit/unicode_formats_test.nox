@@ -67,8 +67,12 @@ def test_uuid7_and_timezone_formats() -> None:
     u4: str = nox.uuid.uuid4()
 
     # Valid UUIDv7 + valid timezone
-    r1: ValidationResult = s.validate_json("{\"event_id\": \"" + u7 + "\", \"tz\": \"Europe/Istanbul\"}")
-    nox.test.assert_true(r1.is_valid, "Generated UUIDv7 and Europe/Istanbul accepted")
+    r1: ValidationResult = s.validate_json("{\"event_id\": \"" + u7 + "\", \"tz\": \"UTC\"}")
+    nox.test.assert_true(r1.is_valid, "Generated UUIDv7 and UTC accepted")
+    # IANA regions need tzdata; nox.timezone is unsupported on Windows/wasm/freestanding.
+    if nox.timezone.is_supported():
+        r1b: ValidationResult = s.validate_json("{\"event_id\": \"" + u7 + "\", \"tz\": \"Europe/Istanbul\"}")
+        nox.test.assert_true(r1b.is_valid, "Europe/Istanbul accepted when tzdata is available")
 
     # UUIDv4 must be rejected by .uuid7()
     r2: ValidationResult = s.validate_json("{\"event_id\": \"" + u4 + "\", \"tz\": \"UTC\"}")
