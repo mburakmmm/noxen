@@ -5,6 +5,13 @@ All notable changes to **Noxen** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] - 2026-11-21
+
+### Fixed
+- **Cross-Platform CI & Windows Compatibility**:
+  - Updated `.github/workflows/ci.yml` to install Zig `0.16.0` across `ubuntu-latest`, `macos-latest`, and `windows-latest` (enabling `wasm32-wasi` linking on Linux/macOS and LLVM backend compilation on Windows) and raised the CI job timeout to 60 minutes.
+  - Guarded the `"Europe/Istanbul"` IANA timezone assertion in `tests/unit/unicode_formats_test.nox` with `nox.timezone.is_supported()` so platforms without system `tzdata` (such as Windows) still validate `"UTC"` cleanly.
+
 ## [0.12.0] - 2026-11-19
 
 ### Added
